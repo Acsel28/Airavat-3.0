@@ -9,7 +9,7 @@ const AGE_SAMPLE_COUNT = 5
 const AGE_FRAME_GAP_MS = 500
 const AGE_PREDICTION_INTERVAL_MS = 8000
 
-export default function WebcamFeed({ onLivenessUpdate, onAgeUpdate, onAgeError, active }) {
+export default function WebcamFeed({ onLivenessUpdate, onAgeUpdate, onAgeError, active, sessionId }) {
   const videoRef      = useRef(null)
   const captureCanvas = useRef(null)   // hidden – for grabbing frames
   const overlayCanvas = useRef(null)   // visible overlay drawn on top of video
@@ -132,14 +132,14 @@ export default function WebcamFeed({ onLivenessUpdate, onAgeUpdate, onAgeError, 
     try {
       const res  = await fetch('/analyze-frame', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: b64 }),
+        body: JSON.stringify({ image: b64, session_id: sessionId }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       lastDataRef.current = data
       onLivenessUpdate(data)
     } catch (err) { console.warn('Frame analysis error:', err) }
-  }, [cameraReady, onLivenessUpdate])
+  }, [cameraReady, onLivenessUpdate, sessionId])
 
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 

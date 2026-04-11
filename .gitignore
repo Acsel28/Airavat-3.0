@@ -6,3 +6,6 @@ node_modules/
 __pycache__/
 **/*.pyc
 *.pyc
+**/.deepface/
+.deepface/
+.env

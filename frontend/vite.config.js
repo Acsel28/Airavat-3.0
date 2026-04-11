@@ -7,6 +7,7 @@ export default defineConfig({
     port: 5173,
     // Proxy API calls to FastAPI backend
     proxy: {
+      '/api': 'http://localhost:8000',
       '/analyze-frame': 'http://localhost:8000',
       '/process-text': 'http://localhost:8000',
       '/predict-age': 'http://localhost:8000',

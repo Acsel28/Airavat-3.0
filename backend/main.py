@@ -5,17 +5,27 @@ Handles liveness detection, AI text responses, and session tracking.
 
 import base64
 import importlib.metadata
+import json
 import os
 import time
+import urllib.error
+import urllib.request
 import uuid
 import numpy as np
 import cv2
 import mediapipe as mp
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import random
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except Exception:
+    pass
 
 app = FastAPI(title="AI Onboarding Backend", version="1.1.0")
 
@@ -77,11 +87,24 @@ class TextRequest(BaseModel):
     session_id: Optional[str] = "default"
 
 
+class SpeechRequest(BaseModel):
+    text: str
+    voice: str = "marin"
+    instructions: Optional[str] = "Speak in a warm, natural, human-like onboarding assistant voice."
+    response_format: str = "wav"
+
+
+class AvatarTalkRequest(BaseModel):
+    text: str
+
+
 class TextResponse(BaseModel):
     reply: str
     intent: str
     confidence: float
     session_id: str
+    provider: str
+    suggestions: Optional[List[str]] = None
 
 
 class SessionResponse(BaseModel):
@@ -236,6 +259,144 @@ def get_or_create_session(session_id: str) -> dict:
     return sessions[session_id]
 
 
+def build_fallback_reply(text: str, intent: str) -> str:
+    cleaned = text.strip()
+    if cleaned:
+        return f"I heard you say: {cleaned}. Tell me a little more so I can help with the next onboarding step."
+    replies = ONBOARDING_RESPONSES.get(intent, ONBOARDING_RESPONSES["default"])
+    return random.choice(replies)
+
+
+def generate_ai_reply(text: str) -> tuple[str, str]:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return build_fallback_reply(text, classify_intent(text)), "fallback"
+    try:
+        # Lazy import - Gemini client may not be installed in all environments
+        from google import genai
+    except Exception:
+        return build_fallback_reply(text, classify_intent(text)), "fallback"
+
+    try:
+        client = genai.Client(api_key=api_key)
+        prompt = (
+            "You are a warm onboarding assistant. "
+            "Reply conversationally in 1 to 3 short sentences, staying helpful and natural. "
+            "Avoid generic filler and directly address the specific user message. "
+            "User message: "
+            f"{text}"
+        )
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        reply = getattr(response, "text", "") or ""
+        if not reply.strip():
+            raise HTTPException(status_code=502, detail="Gemini returned an empty reply")
+        return reply.strip(), "gemini"
+    except Exception:
+        return build_fallback_reply(text, classify_intent(text)), "fallback"
+
+
+def generate_speech_audio(text: str, voice: str, instructions: Optional[str], response_format: str) -> bytes:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured on the backend")
+
+    payload = {
+        "model": "gpt-4o-mini-tts",
+        "input": text,
+        "voice": voice,
+        "response_format": response_format,
+    }
+    if instructions:
+        payload["instructions"] = instructions
+
+    request = urllib.request.Request(
+        url="https://api.openai.com/v1/audio/speech",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=90) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=exc.code, detail=f"TTS request failed: {detail}")
+    except urllib.error.URLError as exc:
+        raise HTTPException(status_code=502, detail=f"TTS request failed: {exc.reason}")
+
+
+def did_request(path: str, method: str = "GET", payload: Optional[dict] = None) -> dict:
+    api_key = os.getenv("DID_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="DID_API_KEY is not configured on the backend")
+
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url=f"https://api.d-id.com{path}",
+        data=body,
+        headers={
+            "Authorization": f"Basic {api_key}",
+            "Content-Type": "application/json",
+        },
+        method=method,
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=120) as resp:
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=exc.code, detail=f"D-ID request failed: {detail}")
+    except urllib.error.URLError as exc:
+        raise HTTPException(status_code=502, detail=f"D-ID request failed: {exc.reason}")
+
+
+def create_did_talk(text: str) -> dict:
+    source_url = os.getenv("DID_SOURCE_URL")
+    if not source_url:
+        raise HTTPException(status_code=503, detail="DID_SOURCE_URL is not configured on the backend")
+
+    payload = {
+        "source_url": source_url,
+        "script": {
+            "type": "text",
+            "subtitles": "false",
+            "provider": {
+                "type": "microsoft",
+                "voice_id": os.getenv("DID_VOICE_ID", "en-US-JennyNeural"),
+            },
+            "input": text,
+        },
+        "config": {
+            "fluent": True,
+            "pad_audio": 0.0,
+        },
+    }
+
+    talk = did_request("/talks", method="POST", payload=payload)
+    talk_id = talk.get("id")
+    if not talk_id:
+        raise HTTPException(status_code=502, detail="D-ID did not return a talk id")
+
+    for _ in range(40):
+        status = did_request(f"/talks/{talk_id}")
+        if status.get("status") == "done":
+            return status
+        if status.get("status") in {"error", "rejected"}:
+            raise HTTPException(status_code=502, detail=f"D-ID talk failed: {status}")
+        time.sleep(2)
+
+    raise HTTPException(status_code=504, detail="D-ID talk generation timed out")
+
+
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 @app.post("/analyze-frame", response_model=FrameResponse)
 async def analyze_frame(req: FrameRequest):
@@ -285,8 +446,7 @@ async def process_text(req: TextRequest):
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
     intent  = classify_intent(req.text)
-    replies = ONBOARDING_RESPONSES.get(intent, ONBOARDING_RESPONSES["default"])
-    reply   = random.choice(replies)
+    reply, provider = generate_ai_reply(req.text)
 
     sess_id = req.session_id or str(uuid.uuid4())
     sess    = get_or_create_session(sess_id)
@@ -294,12 +454,66 @@ async def process_text(req: TextRequest):
     sess["messages"].append({"role": "assistant",  "text": reply,    "ts": time.time()})
     sess["intents"].append(intent)
 
+    # Provide optional follow-up suggestions when intent is vague/default.
+    suggestions = None
+    if intent == "default":
+        suggestions = [
+            "Can you tell me your role and experience?",
+            "What would you like to learn about the platform?",
+            "Do you have any questions about onboarding steps?",
+        ]
+
     return TextResponse(
         reply=reply,
         intent=intent,
         confidence=round(random.uniform(0.82, 0.99), 2),
         session_id=sess_id,
+        provider=provider,
+        suggestions=suggestions,
     )
+
+
+@app.post("/api/avatar/talk")
+async def avatar_talk(req: AvatarTalkRequest):
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+    talk = create_did_talk(text)
+    result_url = talk.get("result_url") or talk.get("audio_url")
+    if not result_url:
+        raise HTTPException(status_code=502, detail=f"D-ID did not return a playable result: {talk}")
+
+    return {
+        "id": talk.get("id"),
+        "status": talk.get("status"),
+        "result_url": result_url,
+    }
+
+
+@app.post("/api/speak")
+async def speak_text(req: SpeechRequest):
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+    audio_bytes = generate_speech_audio(
+        text=text,
+        voice=req.voice,
+        instructions=req.instructions,
+        response_format=req.response_format,
+    )
+
+    media_type = {
+        "mp3": "audio/mpeg",
+        "wav": "audio/wav",
+        "opus": "audio/ogg",
+        "aac": "audio/aac",
+        "flac": "audio/flac",
+        "pcm": "application/octet-stream",
+    }.get(req.response_format, "audio/wav")
+
+    return Response(content=audio_bytes, media_type=media_type)
 
 
 @app.post("/predict-age", response_model=AgePredictionResponse)
