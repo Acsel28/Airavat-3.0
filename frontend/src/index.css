@@ -23,12 +23,22 @@ body {
   min-height: 100vh;
 }
 
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
 /* ─── Root Layout ─────────────────────────────────────────────────────── */
 .kyc-root {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  max-height: 100vh;
+  min-height: 0;
+  overflow: hidden;
   background: #f0f2f5;
+  flex: 1;
 }
 
 /* ─── Top Status Bar ──────────────────────────────────────────────────── */
@@ -44,6 +54,7 @@ body {
   top: 0;
   z-index: 100;
   gap: 16px;
+  flex-shrink: 0;
 }
 
 .kyc-topbar-left {
@@ -65,6 +76,21 @@ body {
 }
 .kyc-logo strong {
   color: #3b82f6;
+}
+
+.kyc-topbar-user {
+  margin-left: 12px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #1e40af;
+  background: #eff6ff;
+  border-radius: 8px;
+  border: 1px solid #bfdbfe;
+  max-width: min(240px, 28vw);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .kyc-topbar-stats {
@@ -200,14 +226,16 @@ body {
 /* ─── Main 3-column layout ────────────────────────────────────────────── */
 .kyc-main {
   display: grid;
-  grid-template-columns: 280px 1fr 340px;
-  gap: 16px;
-  padding: 16px;
+  grid-template-columns: minmax(0, 260px) minmax(0, 1fr) minmax(0, 320px);
+  gap: 12px;
+  padding: 12px;
   flex: 1;
   min-height: 0;
-  max-width: 1400px;
+  max-width: min(1400px, 100vw);
   margin: 0 auto;
   width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 @media (max-width: 1100px) {
@@ -224,16 +252,23 @@ body {
 .kyc-sidebar-left {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .kyc-extraction-panel {
   background: #fff;
   border-radius: 14px;
   border: 1px solid #e5e7eb;
-  padding: 18px;
+  padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .kyc-extraction-header {
@@ -400,7 +435,10 @@ body {
 .kyc-center {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .kyc-webcam-wrapper {
@@ -408,8 +446,18 @@ body {
   border-radius: 16px;
   overflow: hidden;
   background: #111827;
-  flex: 1;
-  min-height: 400px;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: min(48vh, 420px);
+  display: flex;
+  flex-direction: column;
+}
+
+.kyc-webcam-wrapper .kyc-webcam-aspect {
+  max-height: 100%;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* AI Agent overlay card */
@@ -493,6 +541,8 @@ body {
 
 /* TalkingAvatar compact strip */
 .kyc-center-controls {
+  flex-shrink: 0;
+  min-width: 0;
 }
 
 .kyc-avatar-strip {
@@ -602,6 +652,9 @@ body {
 .kyc-sidebar-right {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .kyc-chat-panel {
@@ -986,6 +1039,7 @@ body {
   padding: 10px 20px;
   font-size: 13px;
   color: #92400e;
+  flex-shrink: 0;
 }
 .kyc-security-banner strong {
   font-weight: 700;

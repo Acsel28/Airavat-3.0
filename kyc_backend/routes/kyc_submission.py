@@ -1,7 +1,10 @@
 from fastapi import APIRouter, UploadFile, File, Form, Depends
 from sqlalchemy.orm import Session
-from database import KYCUser, get_db
+from database import KYCUser, VideoSession, get_db
+from services.otp_service import send_video_chat_invite_email
 from datetime import datetime
+import os
+import uuid
 import base64
 import numpy as np
 import io
@@ -113,6 +116,8 @@ async def submit_kyc(
                 "message": "User with this email, Aadhaar, or PAN already exists."
             }
         
+        session_uuid = uuid.uuid4()
+
         # Create new KYC user record with embedding
         kyc_user = KYCUser(
             full_name=full_name,
@@ -125,10 +130,22 @@ async def submit_kyc(
             embedding=embedding_vector,  # Store face embedding vector
             is_verified=True
         )
-        
+
+        video_session = VideoSession(
+            session_id=session_uuid,
+            user_name=full_name,
+            is_completed=False,
+        )
+
         db.add(kyc_user)
+        db.add(video_session)
         db.commit()
         db.refresh(kyc_user)
+        db.refresh(video_session)
+
+        email_ok = send_video_chat_invite_email(email, full_name, str(session_uuid))
+        if not email_ok:
+            print("⚠️ Video chat invite email could not be sent; DB row was stored.")
         
         print(f"\n✅ KYC USER STORED SUCCESSFULLY")
         print(f"🔹 User ID: {kyc_user.id}")
@@ -137,11 +154,16 @@ async def submit_kyc(
         print(f"🔹 Face Embedding: Stored (128 dimensions)")
         print("="*60 + "\n")
         
+        base_url = os.getenv("VIDEO_CHAT_BASE_URL", "http://localhost").rstrip("/")
+        video_chat_url = f"{base_url}/video_chat?session={session_uuid}"
+
         return {
             "status": "success",
             "message": "KYC data stored successfully",
             "user_id": kyc_user.id,
-            "email": kyc_user.email
+            "email": kyc_user.email,
+            "session_id": str(session_uuid),
+            "video_chat_url": video_chat_url,
         }
         
     except Exception as err:

@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from "react";
+import { COLORS, styles } from "./kycTheme";
+import { KycNavbar } from "./KycNavbar";
 import axios from "axios";
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithPhoneNumber, RecaptchaVerifier } from "firebase/auth";
@@ -30,322 +32,8 @@ if (firebaseConfig.apiKey && firebaseConfig.authDomain) {
 
 const COOLDOWN_TIME = 30; // seconds between OTP resend attempts
 
-const COLORS = {
-  blue: "#387ED1",
-  blueDark: "#2563B0",
-  blueLight: "#EBF3FC",
-  text: "#1a1a2e",
-  textMuted: "#6b7280",
-  border: "#e5e7eb",
-  bg: "#f9fafb",
-  white: "#ffffff",
-  success: "#16a34a",
-  successLight: "#f0fdf4",
-  error: "#dc2626",
-  errorLight: "#fef2f2",
-  accent: "#FF6B00",
-};
-
-const styles = {
-  app: {
-    fontFamily: "'DM Sans', 'Segoe UI', sans-serif",
-    minHeight: "100vh",
-    background: COLORS.bg,
-    color: COLORS.text,
-  },
-  navbar: {
-    background: COLORS.white,
-    borderBottom: `1px solid ${COLORS.border}`,
-    padding: "0 40px",
-    height: 60,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    position: "sticky",
-    top: 0,
-    zIndex: 100,
-  },
-  logo: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    fontWeight: 700,
-    fontSize: 20,
-    color: COLORS.blue,
-    letterSpacing: "-0.5px",
-  },
-  logoIcon: {
-    width: 28,
-    height: 28,
-    background: COLORS.blue,
-    borderRadius: 6,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  pageContainer: {
-    maxWidth: 560,
-    margin: "0 auto",
-    padding: "48px 24px 80px",
-  },
-  stepHeader: {
-    marginBottom: 32,
-  },
-  stepBadge: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    background: COLORS.blueLight,
-    color: COLORS.blue,
-    fontSize: 12,
-    fontWeight: 600,
-    padding: "4px 12px",
-    borderRadius: 20,
-    marginBottom: 16,
-    letterSpacing: "0.4px",
-    textTransform: "uppercase",
-  },
-  stepTitle: {
-    fontSize: 26,
-    fontWeight: 700,
-    color: COLORS.text,
-    margin: "0 0 8px",
-    letterSpacing: "-0.5px",
-  },
-  stepSubtitle: {
-    fontSize: 15,
-    color: COLORS.textMuted,
-    margin: 0,
-    lineHeight: 1.6,
-  },
-  card: {
-    background: COLORS.white,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: 12,
-    padding: 28,
-    marginBottom: 16,
-  },
-  label: {
-    display: "block",
-    fontSize: 13,
-    fontWeight: 600,
-    color: COLORS.text,
-    marginBottom: 6,
-    letterSpacing: "0.2px",
-  },
-  input: {
-    width: "100%",
-    padding: "11px 14px",
-    fontSize: 15,
-    border: `1.5px solid ${COLORS.border}`,
-    borderRadius: 8,
-    outline: "none",
-    background: COLORS.white,
-    color: COLORS.text,
-    boxSizing: "border-box",
-    transition: "border-color 0.15s",
-    fontFamily: "inherit",
-  },
-  inputFocused: {
-    borderColor: COLORS.blue,
-  },
-  fieldGroup: {
-    marginBottom: 20,
-  },
-  btnPrimary: {
-    width: "100%",
-    padding: "13px 24px",
-    background: COLORS.blue,
-    color: COLORS.white,
-    border: "none",
-    borderRadius: 8,
-    fontSize: 15,
-    fontWeight: 600,
-    cursor: "pointer",
-    transition: "background 0.15s, transform 0.1s",
-    letterSpacing: "0.2px",
-    marginTop: 8,
-  },
-  btnSecondary: {
-    padding: "10px 20px",
-    background: "transparent",
-    color: COLORS.blue,
-    border: `1.5px solid ${COLORS.blue}`,
-    borderRadius: 8,
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: "pointer",
-    transition: "background 0.15s",
-    fontFamily: "inherit",
-  },
-  otpContainer: {
-    display: "flex",
-    gap: 10,
-    justifyContent: "center",
-    margin: "20px 0",
-  },
-  otpInput: {
-    width: 50,
-    height: 54,
-    textAlign: "center",
-    fontSize: 22,
-    fontWeight: 700,
-    border: `1.5px solid ${COLORS.border}`,
-    borderRadius: 8,
-    outline: "none",
-    background: COLORS.white,
-    color: COLORS.text,
-    fontFamily: "inherit",
-    transition: "border-color 0.15s",
-  },
-  progressBar: {
-    display: "flex",
-    gap: 6,
-    marginBottom: 36,
-  },
-  progressStep: {
-    flex: 1,
-    height: 4,
-    borderRadius: 2,
-    background: COLORS.border,
-    transition: "background 0.3s",
-  },
-  progressStepActive: {
-    background: COLORS.blue,
-  },
-  progressStepDone: {
-    background: COLORS.blue,
-    opacity: 0.4,
-  },
-  infoRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    padding: "10px 0",
-    borderBottom: `1px solid ${COLORS.border}`,
-  },
-  infoLabel: {
-    fontSize: 13,
-    color: COLORS.textMuted,
-    fontWeight: 500,
-    minWidth: 140,
-  },
-  infoValue: {
-    fontSize: 14,
-    color: COLORS.text,
-    fontWeight: 600,
-    textAlign: "right",
-    flex: 1,
-  },
-  uploadBox: {
-    border: `2px dashed ${COLORS.border}`,
-    borderRadius: 10,
-    padding: "32px 24px",
-    textAlign: "center",
-    cursor: "pointer",
-    transition: "border-color 0.15s, background 0.15s",
-    background: COLORS.bg,
-  },
-  uploadBoxActive: {
-    borderColor: COLORS.blue,
-    background: COLORS.blueLight,
-  },
-  uploadIcon: {
-    fontSize: 32,
-    marginBottom: 10,
-    display: "block",
-  },
-  successBadge: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    background: COLORS.successLight,
-    color: COLORS.success,
-    fontSize: 13,
-    fontWeight: 600,
-    padding: "6px 14px",
-    borderRadius: 20,
-    marginTop: 10,
-  },
-  signatureBox: {
-    border: `1.5px solid ${COLORS.border}`,
-    borderRadius: 8,
-    background: "#fefefe",
-    height: 160,
-    position: "relative",
-    cursor: "crosshair",
-    overflow: "hidden",
-  },
-  signaturePlaceholder: {
-    position: "absolute",
-    inset: 0,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: COLORS.border,
-    fontSize: 14,
-    pointerEvents: "none",
-    userSelect: "none",
-  },
-  termsText: {
-    fontSize: 12,
-    color: COLORS.textMuted,
-    lineHeight: 1.7,
-    marginTop: 16,
-  },
-  helpText: {
-    fontSize: 12,
-    color: COLORS.textMuted,
-    marginTop: 6,
-    lineHeight: 1.5,
-  },
-  errorText: {
-    fontSize: 12,
-    color: COLORS.error,
-    marginTop: 4,
-  },
-  divider: {
-    height: 1,
-    background: COLORS.border,
-    margin: "20px 0",
-  },
-  successScreen: {
-    textAlign: "center",
-    padding: "48px 24px",
-  },
-  successIcon: {
-    width: 80,
-    height: 80,
-    background: COLORS.successLight,
-    borderRadius: "50%",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    margin: "0 auto 24px",
-    fontSize: 36,
-  },
-};
-
 // Temporarily commented out Aadhaar OTP step
 const STEPS = ["Details", "Email OTP", "Aadhaar", /* "Aadhaar OTP" */ "PAN", "Face Capture", "KYC Review", "Sign & Submit"];
-
-function Navbar() {
-  return (
-    <nav style={styles.navbar}>
-      <div style={styles.logo}>
-        <div style={styles.logoIcon}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M2 12L8 4L14 12" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </div>
-        FinServe
-      </div>
-      <div style={{ fontSize: 13, color: COLORS.textMuted }}>
-        Secure KYC Portal · <span style={{ color: COLORS.success, fontWeight: 600 }}>🔒 256-bit SSL</span>
-      </div>
-    </nav>
-  );
-}
 
 function ProgressBar({ current, total }) {
   return (
@@ -1497,15 +1185,15 @@ function SuccessScreen() {
   return (
     <div style={styles.successScreen}>
       <div style={styles.successIcon}>🎉</div>
-      <h1 style={{ ...styles.stepTitle, textAlign: "center" }}>KYC submitted successfully!</h1>
+      <h1 style={{ ...styles.stepTitle, textAlign: "center" }}>Your KYC application has been verified</h1>
       <p style={{ color: COLORS.textMuted, fontSize: 15, lineHeight: 1.7, marginBottom: 32 }}>
-        Your KYC application has been received. Our team will review and verify your documents within <strong>24–48 business hours</strong>. You'll receive a confirmation on your registered email.
+        Please check your mail to start a session with an agent and get instant loan approval.
       </p>
       <div style={{ background: COLORS.blueLight, borderRadius: 10, padding: "20px 24px", textAlign: "left", border: `1px solid #c3d9f5`, marginBottom: 24 }}>
         {[
           ["Application ID", "FIN-KYC-2026-84721"],
-          ["Status", "Under Review"],
-          ["Estimated TAT", "24–48 business hours"],
+          ["Status", "Verified"],
+          ["Next step", "Check email · agent video session"],
         ].map(([l, v]) => (
           <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #d4e5f5" }}>
             <span style={{ fontSize: 13, color: COLORS.textMuted }}>{l}</span>
@@ -1547,7 +1235,7 @@ export default function App() {
   return (
     <div style={styles.app}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-      <Navbar />
+      <KycNavbar />
       <div style={styles.pageContainer}>
         {step < 7 && (
           <>

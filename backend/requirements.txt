@@ -10,5 +10,8 @@ deepface==0.0.93
 tensorflow==2.15.1
 google-genai>=0.8.0
 python-dotenv>=1.0.1
+PyJWT>=2.8.0
+sqlalchemy>=2.0.30
+psycopg2-binary>=2.9.9
 faster-whisper==1.0.3
 TTS==0.22.0
