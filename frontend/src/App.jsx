@@ -12,6 +12,8 @@ import AnalyticsPanel      from './components/AnalyticsPanel.jsx'
 
 export default function App() {
   const [livenessData, setLivenessData]       = useState(null)
+  const [ageData, setAgeData]                 = useState(null)
+  const [ageError, setAgeError]               = useState('')
   const [avatarState, setAvatarState]         = useState('idle')
   const [sessionActive, setSessionActive]     = useState(false)
   const [currentIntent, setCurrentIntent]     = useState('greeting')
@@ -50,6 +52,8 @@ export default function App() {
       setMessageCount(0)
       setResponseTimes([])
       setLivenessSamples([])
+      setAgeData(null)
+      setAgeError('')
     }
     setSessionActive(s => !s)
   }
@@ -117,7 +121,12 @@ export default function App() {
             <span className="text-[10px] font-mono text-muted/50">2s analysis interval</span>
           </div>
 
-          <WebcamFeed onLivenessUpdate={handleLiveness} active={sessionActive} />
+          <WebcamFeed
+            onLivenessUpdate={handleLiveness}
+            onAgeUpdate={setAgeData}
+            onAgeError={setAgeError}
+            active={sessionActive}
+          />
 
           {/* Liveness bar */}
           <div className="card-glass rounded-xl px-5 py-3 flex items-center gap-4">
@@ -170,7 +179,7 @@ export default function App() {
           />
 
           {/* Liveness detail */}
-          <LivenessPanel data={livenessData} />
+          <LivenessPanel data={livenessData} ageData={ageData} ageError={ageError} />
 
           {/* Voice chat */}
           <VoiceChat

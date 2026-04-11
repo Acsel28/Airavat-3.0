@@ -1,7 +1,7 @@
 node_modules/
-venv/
+.venv/
 **/node_modules/
-**/venv/
+**/.venv/
 **/__pycache__/
 __pycache__/
 **/*.pyc

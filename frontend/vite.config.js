@@ -9,6 +9,7 @@ export default defineConfig({
     proxy: {
       '/analyze-frame': 'http://localhost:8000',
       '/process-text': 'http://localhost:8000',
+      '/predict-age': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
     },
   },
