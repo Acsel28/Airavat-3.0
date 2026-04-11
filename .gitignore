@@ -6,5 +6,5 @@ node_modules/
 __pycache__/
 **/*.pyc
 *.pyc
-**.vision_key.json
+**vision_key.json
 .vision_key
