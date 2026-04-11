@@ -6,3 +6,5 @@ venv/
 __pycache__/
 **/*.pyc
 *.pyc
+**.vision_key
+.vision_key
