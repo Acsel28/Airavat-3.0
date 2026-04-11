@@ -6,7 +6,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react'
 
 const CAPTURE_INTERVAL_MS = 2000
 
-export default function WebcamFeed({ onLivenessUpdate, active }) {
+export default function WebcamFeed({ onLivenessUpdate, onSecurityState, active, sessionId }) {
   const videoRef      = useRef(null)
   const captureCanvas = useRef(null)   // hidden – for grabbing frames
   const overlayCanvas = useRef(null)   // visible overlay drawn on top of video
@@ -128,14 +128,15 @@ export default function WebcamFeed({ onLivenessUpdate, active }) {
     try {
       const res  = await fetch('/analyze-frame', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: b64 }),
+        body: JSON.stringify({ image: b64, session_id: sessionId }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       lastDataRef.current = data
       onLivenessUpdate(data)
+      onSecurityState?.(data)
     } catch (err) { console.warn('Frame analysis error:', err) }
-  }, [cameraReady, onLivenessUpdate])
+  }, [cameraReady, onLivenessUpdate, onSecurityState, sessionId])
 
   // ── Poll ────────────────────────────────────────────────────────────────────
   useEffect(() => {

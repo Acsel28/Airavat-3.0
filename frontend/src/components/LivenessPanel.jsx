@@ -61,6 +61,10 @@ function IndicatorRow({ label, active }) {
 export default function LivenessPanel({ data }) {
   const score      = data ? Math.round(data.liveness_score * 100) : 0
   const faceOk     = data?.face_detected ?? false
+  const verifiedOk = data?.is_verified ?? false
+  const faceCount  = data?.face_count ?? 0
+  const hasRefFace = data?.debug?.has_reference_embedding ?? false
+  const alertReason = data?.security_alert || 'none'
   const movementOk = data?.movement_detected ?? false
   const diffScore  = data?.frame_diff_score ?? 0
 
@@ -90,6 +94,8 @@ export default function LivenessPanel({ data }) {
       {/* Indicators */}
       <div>
         <IndicatorRow label="Face detected"   active={faceOk} />
+        <IndicatorRow label="Verified user"   active={verifiedOk} />
+        <IndicatorRow label="Reference saved" active={hasRefFace} />
         <IndicatorRow label="Movement"         active={movementOk} />
         <IndicatorRow label="Frame diff"
           active={diffScore > 0.01}
@@ -100,6 +106,14 @@ export default function LivenessPanel({ data }) {
       <div className="flex items-center justify-between text-[10px] font-mono text-muted">
         <span>Frame Δ</span>
         <span>{(diffScore * 100).toFixed(2)}%</span>
+      </div>
+      <div className="flex items-center justify-between text-[10px] font-mono text-muted">
+        <span>Face count</span>
+        <span>{faceCount}</span>
+      </div>
+      <div className="flex items-center justify-between text-[10px] font-mono text-muted">
+        <span>Security alert</span>
+        <span>{alertReason}</span>
       </div>
     </div>
   )

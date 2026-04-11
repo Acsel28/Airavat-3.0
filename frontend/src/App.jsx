@@ -2,7 +2,7 @@
  * App – root layout for AI Video Onboarding MVP.
  * Wires: webcam → liveness, voice chat → avatar + analytics + progress.
  */
-import React, { useState, useCallback, useRef } from 'react'
+import React, { useState, useCallback } from 'react'
 import WebcamFeed          from './components/WebcamFeed.jsx'
 import LivenessPanel       from './components/LivenessPanel.jsx'
 import AIAvatar            from './components/AIAvatar.jsx'
@@ -11,9 +11,17 @@ import OnboardingProgress  from './components/OnboardingProgress.jsx'
 import AnalyticsPanel      from './components/AnalyticsPanel.jsx'
 
 export default function App() {
+  const makeSessionId = () => (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`)
   const [livenessData, setLivenessData]       = useState(null)
   const [avatarState, setAvatarState]         = useState('idle')
   const [sessionActive, setSessionActive]     = useState(false)
+  const [sessionId, setSessionId]             = useState(() => makeSessionId())
+  const [isSecurityAlertActive, setIsSecurityAlertActive] = useState(false)
+  const [securityAlertType, setSecurityAlertType] = useState(null)
+  const [violationCount, setViolationCount] = useState(0)
+  const [violationSecondsRemaining, setViolationSecondsRemaining] = useState(0)
+  const [meetingTerminated, setMeetingTerminated] = useState(false)
+  const [meetingEndMessage, setMeetingEndMessage] = useState(null)
   const [currentIntent, setCurrentIntent]     = useState('greeting')
   const [completedIntents, setCompletedIntents] = useState([])
   const [messageCount, setMessageCount]       = useState(0)
@@ -42,16 +50,39 @@ export default function App() {
     })
   }, [])
 
+  const handleSecurityState = useCallback((data) => {
+    const isViolation = Boolean(data?.violation_active)
+    const isTerminated = Boolean(data?.meeting_terminated)
+    setIsSecurityAlertActive(isViolation || isTerminated)
+    setSecurityAlertType(data?.security_alert || null)
+    setViolationCount(data?.violation_count || 0)
+    setViolationSecondsRemaining(data?.violation_seconds_remaining || 0)
+    setMeetingTerminated(isTerminated)
+    setMeetingEndMessage(data?.meeting_end_message || null)
+    if (isTerminated) {
+      setSessionActive(false)
+    }
+  }, [])
+
   const toggleSession = () => {
-    if (sessionActive) {
-      // Reset on end
+    const nextActive = !sessionActive
+    if (!nextActive || meetingTerminated) {
+      // Reset on end, and also reset when starting after a terminated meeting.
       setCompletedIntents([])
       setCurrentIntent('greeting')
       setMessageCount(0)
       setResponseTimes([])
       setLivenessSamples([])
+      setLivenessData(null)
+      setIsSecurityAlertActive(false)
+      setSecurityAlertType(null)
+      setViolationCount(0)
+      setViolationSecondsRemaining(0)
+      setMeetingTerminated(false)
+      setMeetingEndMessage(null)
+      setSessionId(makeSessionId())
     }
-    setSessionActive(s => !s)
+    setSessionActive(nextActive)
   }
 
   const livenessScore = livenessData ? Math.round(livenessData.liveness_score * 100) : 0
@@ -117,7 +148,12 @@ export default function App() {
             <span className="text-[10px] font-mono text-muted/50">2s analysis interval</span>
           </div>
 
-          <WebcamFeed onLivenessUpdate={handleLiveness} active={sessionActive} />
+          <WebcamFeed
+            onLivenessUpdate={handleLiveness}
+            onSecurityState={handleSecurityState}
+            active={sessionActive}
+            sessionId={sessionId}
+          />
 
           {/* Liveness bar */}
           <div className="card-glass rounded-xl px-5 py-3 flex items-center gap-4">
@@ -178,9 +214,32 @@ export default function App() {
             onIntentDetected={handleIntent}
             onResponseTime={handleResponseTime}
             onMessageCountChange={setMessageCount}
+            paused={isSecurityAlertActive || meetingTerminated}
+            sessionId={sessionId}
           />
         </div>
       </main>
+
+      {isSecurityAlertActive && (
+        <div className="fixed inset-0 z-50 bg-ink/95 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className="max-w-xl w-full rounded-2xl border border-red-400/40 bg-red-500/10 p-8 text-center">
+            <h2 className="text-2xl font-display font-bold text-red-300">Security Alert</h2>
+            <p className="mt-3 text-base text-red-100">
+              {meetingTerminated
+                ? (meetingEndMessage || 'Meeting ended due to multiple identity violations.')
+                : 'Face not valid. Please return to the camera within 30 seconds or the meeting will end.'}
+            </p>
+            <p className="mt-2 text-xs font-mono text-red-200/80">
+              Reason: {securityAlertType || 'none'}
+            </p>
+            <p className="mt-4 text-xs text-red-100/80">
+              {meetingTerminated
+                ? 'Start a new session to continue.'
+                : `Timer: ${violationSecondsRemaining}s · Violations: ${violationCount}/3`}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* ── Footer ─────────────────────────────────────────────────────────── */}
       <footer className="relative z-10 text-center py-3 border-t border-border/30">

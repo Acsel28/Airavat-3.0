@@ -8,7 +8,14 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 const synth = window.speechSynthesis
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
 
-export default function VoiceChat({ onStateChange, onIntentDetected, onResponseTime, onMessageCountChange }) {
+export default function VoiceChat({
+  onStateChange,
+  onIntentDetected,
+  onResponseTime,
+  onMessageCountChange,
+  paused = false,
+  sessionId,
+}) {
   const [messages, setMessages]     = useState([])
   const [listening, setListening]   = useState(false)
   const [transcript, setTranscript] = useState('')
@@ -20,6 +27,15 @@ export default function VoiceChat({ onStateChange, onIntentDetected, onResponseT
 
   useEffect(() => { if (!SpeechRecognition) setSupported(false) }, [])
 
+  useEffect(() => {
+    if (!paused) return
+    recognitionRef.current?.stop()
+    setListening(false)
+    setTranscript('')
+    synth.cancel()
+    onStateChange?.('idle')
+  }, [paused, onStateChange])
+
   // Auto-scroll
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
@@ -28,6 +44,7 @@ export default function VoiceChat({ onStateChange, onIntentDetected, onResponseT
   // Keyboard shortcut: SPACE to toggle mic
   useEffect(() => {
     const onKey = (e) => {
+      if (paused) return
       if (e.code === 'Space' && e.target === document.body) {
         e.preventDefault()
         if (listening) stopListening()
@@ -36,7 +53,7 @@ export default function VoiceChat({ onStateChange, onIntentDetected, onResponseT
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [listening])  // eslint-disable-line
+  }, [listening, paused])  // eslint-disable-line
 
   const speak = useCallback((text) => {
     synth.cancel()
@@ -66,7 +83,7 @@ export default function VoiceChat({ onStateChange, onIntentDetected, onResponseT
       const res  = await fetch('/process-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, session_id: sessionId }),
       })
       const data = await res.json()
       const rt   = Date.now() - t0
@@ -87,10 +104,10 @@ export default function VoiceChat({ onStateChange, onIntentDetected, onResponseT
     } finally {
       setLoading(false)
     }
-  }, [speak, onIntentDetected, onResponseTime, onMessageCountChange])
+  }, [speak, onIntentDetected, onResponseTime, onMessageCountChange, sessionId])
 
   const startListening = useCallback(() => {
-    if (!SpeechRecognition || listening) return
+    if (!SpeechRecognition || listening || paused) return
     synth.cancel()
     const recognition = new SpeechRecognition()
     recognitionRef.current = recognition
@@ -109,7 +126,7 @@ export default function VoiceChat({ onStateChange, onIntentDetected, onResponseT
     recognition.onerror = (e) => { console.warn('Speech error:', e.error); setListening(false); onStateChange?.('idle') }
     recognition.onend   = () => { setListening(false); setTranscript(''); if (!synth.speaking) onStateChange?.('idle') }
     recognition.start()
-  }, [listening, onStateChange, sendText])
+  }, [listening, onStateChange, sendText, paused])
 
   const stopListening = () => recognitionRef.current?.stop()
 
@@ -175,12 +192,12 @@ export default function VoiceChat({ onStateChange, onIntentDetected, onResponseT
         <button
           onMouseDown={startListening} onMouseUp={stopListening}
           onTouchStart={startListening} onTouchEnd={stopListening}
-          disabled={loading}
+          disabled={loading || paused}
           className={`relative flex items-center justify-center rounded-full transition-all duration-200 cursor-pointer ${
             listening
               ? 'w-16 h-16 glow-accent bg-accent/20 border-2 border-accent'
               : 'w-14 h-14 bg-card border-2 border-border hover:border-accent/50 hover:bg-accent/10'
-          } ${loading ? 'opacity-40 cursor-not-allowed' : ''}`}
+          } ${(loading || paused) ? 'opacity-40 cursor-not-allowed' : ''}`}
         >
           {listening && <span className="absolute inset-0 rounded-full animate-ping bg-accent/30" />}
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
@@ -193,7 +210,7 @@ export default function VoiceChat({ onStateChange, onIntentDetected, onResponseT
           </svg>
         </button>
         <p className="text-xs text-muted font-body">
-          {listening ? 'Listening… release to send' : 'Hold to speak'}
+          {paused ? 'Paused due to security alert' : listening ? 'Listening… release to send' : 'Hold to speak'}
         </p>
       </div>
     </div>
