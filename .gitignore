@@ -1,11 +1,37 @@
+# Node
 node_modules/
-.venv/
 **/node_modules/
+
+# Python virtual environments
+.venv/
+venv/
 **/.venv/
-**/__pycache__/
+**/venv/
+
+# Python cache
 __pycache__/
-**/*.pyc
+**/__pycache__/
 *.pyc
-**vision_key.json
-kyc_backend/vision_key.json
+**/*.pyc
+
+# Environment files
+.env
+**/.env
+**/.env.*
+
+# Google Vision / secrets
+vision_key.json
+**/vision_key.json
 .vision_key
+
+# Local databases
+*.db
+authorized_embeddings.db
+**/authorized_embeddings.db
+backend/authorized_embeddings.db
+
+# DeepFace / ML model cache
+.deepface/
+**/.deepface/
+.keras/
+**/.keras/
