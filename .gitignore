@@ -7,4 +7,5 @@ __pycache__/
 **/*.pyc
 *.pyc
 **vision_key.json
+kyc_backend/vision_key.json
 .vision_key
