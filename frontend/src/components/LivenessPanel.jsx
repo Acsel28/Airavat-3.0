@@ -58,7 +58,7 @@ function IndicatorRow({ label, active }) {
   )
 }
 
-export default function LivenessPanel({ data }) {
+export default function LivenessPanel({ data, ageData, ageError }) {
   const score      = data ? Math.round(data.liveness_score * 100) : 0
   const faceOk     = data?.face_detected ?? false
   const verifiedOk = data?.is_verified ?? false
@@ -67,6 +67,8 @@ export default function LivenessPanel({ data }) {
   const alertReason = data?.security_alert || 'none'
   const movementOk = data?.movement_detected ?? false
   const diffScore  = data?.frame_diff_score ?? 0
+  const avgAge = ageData?.average_age
+  const ageConfidence = ageData?.confidence
 
   const status =
     score >= 70 ? { label: 'Verified', color: '#6ee7b7' } :
@@ -114,6 +116,22 @@ export default function LivenessPanel({ data }) {
       <div className="flex items-center justify-between text-[10px] font-mono text-muted">
         <span>Security alert</span>
         <span>{alertReason}</span>
+      </div>
+
+      <div className="pt-1 border-t border-border/40">
+        <div className="flex items-center justify-between text-xs font-body">
+          <span className="text-muted">Predicted age</span>
+          <span className="text-gray-200 font-semibold">
+            {typeof avgAge === 'number' ? `${avgAge} yrs` : 'Waiting for face...'}
+          </span>
+        </div>
+        <div className="flex items-center justify-between text-[10px] font-mono text-muted mt-1">
+          <span>Age confidence</span>
+          <span>{typeof ageConfidence === 'number' ? `${ageConfidence.toFixed(1)}%` : '--'}</span>
+        </div>
+        {ageError && (
+          <p className="text-[10px] text-amber-300 mt-1.5">{ageError}</p>
+        )}
       </div>
     </div>
   )
