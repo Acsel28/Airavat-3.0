@@ -25,7 +25,6 @@ export default function App() {
   const [transcript, setTranscript] = useState('')
   const [lastUserText, setLastUserText] = useState('')
   const [assistantReply, setAssistantReply] = useState('')
-  const [assistantProvider, setAssistantProvider] = useState('')
   const [avatarVideoUrl, setAvatarVideoUrl] = useState('')
   const [inputText, setInputText] = useState('')
   const [sessionId, setSessionId] = useState(createSessionId)
@@ -37,6 +36,12 @@ export default function App() {
   const [livenessSamples, setLivenessSamples] = useState([])
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(false)
+  const [isSecurityAlertActive, setIsSecurityAlertActive] = useState(false)
+  const [securityAlertType, setSecurityAlertType] = useState('none')
+  const [violationCount, setViolationCount] = useState(0)
+  const [violationSecondsRemaining, setViolationSecondsRemaining] = useState(0)
+  const [meetingTerminated, setMeetingTerminated] = useState(false)
+  const [meetingEndMessage, setMeetingEndMessage] = useState('')
 
   const synthRef = useRef(typeof window !== 'undefined' ? window.speechSynthesis : null)
   const audioRef = useRef(null)
@@ -61,6 +66,27 @@ export default function App() {
       const next = [...prev, data.liveness_score]
       return next.length > 30 ? next.slice(-30) : next
     })
+
+    const alert = data?.security_alert && data.security_alert !== 'none'
+    setIsSecurityAlertActive(Boolean(alert))
+    setSecurityAlertType(data?.security_alert || 'none')
+    setViolationCount(data?.violation_count || 0)
+    setViolationSecondsRemaining(data?.violation_seconds_remaining || 0)
+
+    if (data?.meeting_terminated) {
+      setMeetingTerminated(true)
+      setMeetingEndMessage(data?.meeting_end_message || 'Meeting ended due to multiple identity violations.')
+      setSessionActive(false)
+      setAvatarState('idle')
+    }
+  }, [])
+
+  const handleSecurityState = useCallback((data) => {
+    const alert = data?.security_alert && data.security_alert !== 'none'
+    setIsSecurityAlertActive(Boolean(alert))
+    setSecurityAlertType(data?.security_alert || 'none')
+    setViolationCount(data?.violation_count || 0)
+    setViolationSecondsRemaining(data?.violation_seconds_remaining || 0)
   }, [])
 
   const handleIntent = useCallback((intent) => {
@@ -167,7 +193,6 @@ export default function App() {
     setTranscript('')
     setLastUserText(text)
     setAssistantReply('')
-    setAssistantProvider('')
     setAvatarVideoUrl('')
     setInputText('')
     appendMessage({ role: 'user', text })
@@ -194,7 +219,6 @@ export default function App() {
       })
 
       setAssistantReply(data.reply)
-      setAssistantProvider(data.provider || '')
       handleIntent(data.intent)
       appendMessage({ role: 'ai', text: data.reply, intent: data.intent, rt: responseTime, suggestions: data.suggestions })
       try {
@@ -217,7 +241,6 @@ export default function App() {
       console.error('Assistant error:', err)
       const fallback = 'Sorry, I had trouble responding just now. Please try again.'
       setAssistantReply(fallback)
-      setAssistantProvider('fallback')
       appendMessage({ role: 'ai', text: fallback })
       setAvatarVideoUrl('')
       await speakReply(fallback)
@@ -245,12 +268,17 @@ export default function App() {
       setTranscript('')
       setLastUserText('')
       setAssistantReply('')
-      setAssistantProvider('')
       setAvatarVideoUrl('')
       setInputText('')
       setMessages([])
       setLoading(false)
       setSessionId(createSessionId())
+      setIsSecurityAlertActive(false)
+      setSecurityAlertType('none')
+      setViolationCount(0)
+      setViolationSecondsRemaining(0)
+      setMeetingTerminated(false)
+      setMeetingEndMessage('')
     }
     setSessionActive((value) => !value)
   }
@@ -323,6 +351,7 @@ export default function App() {
 
           <WebcamFeed
             onLivenessUpdate={handleLiveness}
+            onSecurityState={handleSecurityState}
             onAgeUpdate={setAgeData}
             onAgeError={setAgeError}
             active={sessionActive}
@@ -367,7 +396,6 @@ export default function App() {
             transcript={transcript}
             lastUserText={lastUserText}
             assistantReply={assistantReply}
-            assistantProvider={assistantProvider}
             avatarVideoUrl={avatarVideoUrl}
             sessionId={sessionId}
             inputText={inputText}
@@ -377,7 +405,6 @@ export default function App() {
             onSubmitText={() => submitText()}
             onVideoPlay={() => setAvatarState('speaking')}
             onVideoEnd={() => setAvatarState('idle')}
-            onVideoError={() => setAvatarVideoUrl('')}
           />
 
           <OnboardingProgress
@@ -397,6 +424,27 @@ export default function App() {
           />
         </div>
       </main>
+
+      {isSecurityAlertActive && (
+        <div className="fixed inset-0 z-50 bg-ink/95 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className="max-w-xl w-full rounded-2xl border border-red-400/40 bg-red-500/10 p-8 text-center">
+            <h2 className="text-2xl font-display font-bold text-red-300">Security Alert</h2>
+            <p className="mt-3 text-base text-red-100">
+              {meetingTerminated
+                ? meetingEndMessage || 'Meeting ended due to multiple identity violations.'
+                : securityAlertType === 'multiple_faces'
+                ? 'Multiple faces detected. Only one participant should be visible.'
+                : 'Face not valid. Please return to the camera within 30 seconds or the meeting will end.'}
+            </p>
+            <p className="mt-2 text-xs font-mono text-red-200/80">Reason: {securityAlertType || 'none'}</p>
+            <p className="mt-4 text-xs text-red-100/80">
+              {meetingTerminated
+                ? 'Start a new session to continue.'
+                : `Timer: ${violationSecondsRemaining}s · Violations: ${violationCount}/3`}
+            </p>
+          </div>
+        </div>
+      )}
 
       <footer className="relative z-10 text-center py-3 border-t border-border/30">
         <p className="text-[10px] font-mono text-muted/40">

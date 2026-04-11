@@ -1,5 +1,7 @@
 node_modules/
 .venv/
+venv/
+**/venv/
 **/node_modules/
 **/.venv/
 **/__pycache__/
@@ -9,3 +11,14 @@ __pycache__/
 **/.deepface/
 .deepface/
 .env
+# local face embedding db
+backend/authorized_embeddings.db
+*.db
+authorized_embeddings.db
+**/authorized_embeddings.db
+
+# DeepFace / Keras / TensorFlow local model cache
+backend/.deepface/
+**/.deepface/
+.keras/
+**/.keras/

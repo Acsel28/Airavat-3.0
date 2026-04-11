@@ -9,7 +9,7 @@ const AGE_SAMPLE_COUNT = 5
 const AGE_FRAME_GAP_MS = 500
 const AGE_PREDICTION_INTERVAL_MS = 8000
 
-export default function WebcamFeed({ onLivenessUpdate, onAgeUpdate, onAgeError, active, sessionId }) {
+export default function WebcamFeed({ onLivenessUpdate, onSecurityState, onAgeUpdate, onAgeError, active, sessionId }) {
   const videoRef      = useRef(null)
   const captureCanvas = useRef(null)   // hidden – for grabbing frames
   const overlayCanvas = useRef(null)   // visible overlay drawn on top of video
@@ -138,8 +138,9 @@ export default function WebcamFeed({ onLivenessUpdate, onAgeUpdate, onAgeError, 
       const data = await res.json()
       lastDataRef.current = data
       onLivenessUpdate(data)
+      onSecurityState?.(data)
     } catch (err) { console.warn('Frame analysis error:', err) }
-  }, [cameraReady, onLivenessUpdate, sessionId])
+  }, [cameraReady, onLivenessUpdate, onSecurityState, sessionId])
 
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -166,11 +167,6 @@ export default function WebcamFeed({ onLivenessUpdate, onAgeUpdate, onAgeError, 
 
   const captureAndPredictAge = useCallback(async () => {
     if (!cameraReady) return
-    if (!lastDataRef.current?.face_detected) {
-      onAgeError?.('Face not detected clearly enough for age prediction')
-      return
-    }
-
     try {
       const frames = await captureAgeFrames(AGE_SAMPLE_COUNT)
       if (frames.length === 0) return
@@ -202,7 +198,7 @@ export default function WebcamFeed({ onLivenessUpdate, onAgeUpdate, onAgeError, 
       clearInterval(timerRef.current)
     }
 
-    if (active && cameraReady) {
+    if (cameraReady) {
       captureAndPredictAge()
       ageTimerRef.current = setInterval(captureAndPredictAge, AGE_PREDICTION_INTERVAL_MS)
     } else {
