@@ -5,13 +5,17 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react'
 
 const CAPTURE_INTERVAL_MS = 2000
+const AGE_SAMPLE_COUNT = 5
+const AGE_FRAME_GAP_MS = 500
+const AGE_PREDICTION_INTERVAL_MS = 8000
 
-export default function WebcamFeed({ onLivenessUpdate, active }) {
+export default function WebcamFeed({ onLivenessUpdate, onAgeUpdate, onAgeError, active }) {
   const videoRef      = useRef(null)
   const captureCanvas = useRef(null)   // hidden – for grabbing frames
   const overlayCanvas = useRef(null)   // visible overlay drawn on top of video
   const streamRef     = useRef(null)
   const timerRef      = useRef(null)
+  const ageTimerRef   = useRef(null)
   const lastDataRef   = useRef(null)   // latest backend response
 
   const [cameraError, setCameraError] = useState(null)
@@ -137,14 +141,79 @@ export default function WebcamFeed({ onLivenessUpdate, active }) {
     } catch (err) { console.warn('Frame analysis error:', err) }
   }, [cameraReady, onLivenessUpdate])
 
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+
+  const captureAgeFrames = useCallback(async (count = AGE_SAMPLE_COUNT) => {
+    if (!videoRef.current || !captureCanvas.current || !cameraReady) return []
+    const frames = []
+    const video = videoRef.current
+    const canvas = captureCanvas.current
+    canvas.width = video.videoWidth || 640
+    canvas.height = video.videoHeight || 480
+    const ctx = canvas.getContext('2d')
+
+    for (let i = 0; i < count; i++) {
+      ctx.translate(canvas.width, 0)
+      ctx.scale(-1, 1)
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      frames.push(canvas.toDataURL('image/jpeg', 0.75))
+      if (i < count - 1) await sleep(AGE_FRAME_GAP_MS)
+    }
+
+    return frames
+  }, [cameraReady])
+
+  const captureAndPredictAge = useCallback(async () => {
+    if (!cameraReady) return
+    if (!lastDataRef.current?.face_detected) {
+      onAgeError?.('Face not detected clearly enough for age prediction')
+      return
+    }
+
+    try {
+      const frames = await captureAgeFrames(AGE_SAMPLE_COUNT)
+      if (frames.length === 0) return
+      const res = await fetch('/predict-age', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ frames }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        onAgeError?.(err?.detail || 'Age prediction failed')
+        return
+      }
+      const data = await res.json()
+      onAgeError?.('')
+      onAgeUpdate?.(data)
+    } catch (err) {
+      console.warn('Age prediction error:', err)
+      onAgeError?.('Age prediction unavailable')
+    }
+  }, [cameraReady, captureAgeFrames, onAgeUpdate, onAgeError])
+
   // ── Poll ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (active && cameraReady) {
       captureAndAnalyze()
       timerRef.current = setInterval(captureAndAnalyze, CAPTURE_INTERVAL_MS)
-    } else { clearInterval(timerRef.current) }
-    return () => clearInterval(timerRef.current)
-  }, [active, cameraReady, captureAndAnalyze])
+    } else {
+      clearInterval(timerRef.current)
+    }
+
+    if (active && cameraReady) {
+      captureAndPredictAge()
+      ageTimerRef.current = setInterval(captureAndPredictAge, AGE_PREDICTION_INTERVAL_MS)
+    } else {
+      clearInterval(ageTimerRef.current)
+    }
+
+    return () => {
+      clearInterval(timerRef.current)
+      clearInterval(ageTimerRef.current)
+    }
+  }, [active, cameraReady, captureAndAnalyze, captureAndPredictAge])
 
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-surface border border-border"

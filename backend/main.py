@@ -4,6 +4,8 @@ Handles liveness detection, AI text responses, and session tracking.
 """
 
 import base64
+import importlib.metadata
+import os
 import time
 import uuid
 import numpy as np
@@ -11,7 +13,7 @@ import cv2
 import mediapipe as mp
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 import random
 
@@ -56,6 +58,18 @@ class FrameResponse(BaseModel):
     frame_diff_score: float
     bounding_box: Optional[BoundingBox] = None
     debug: dict
+
+
+class AgeFrameRequest(BaseModel):
+    frames: List[str] = Field(default_factory=list)  # base64 JPEG frames
+    image: Optional[str] = None
+
+
+class AgePredictionResponse(BaseModel):
+    ages: List[float]
+    average_age: float
+    frames_processed: int
+    confidence: float
 
 
 class TextRequest(BaseModel):
@@ -137,6 +151,36 @@ def decode_image(b64: str) -> np.ndarray:
     return img
 
 
+def predict_age_from_image(img_bgr: np.ndarray) -> float:
+    # Import DeepFace lazily so backend can boot even if TF init is slow/problematic.
+    import tensorflow as tf
+
+    if not hasattr(tf, "__version__"):
+        try:
+            tf.__version__ = importlib.metadata.version("tensorflow")
+        except Exception:
+            tf.__version__ = "2.0.0"
+
+    # Keep DeepFace cache/model files inside the project to avoid profile permission issues.
+    deepface_home = os.path.join(os.path.dirname(__file__), ".deepface")
+    os.makedirs(deepface_home, exist_ok=True)
+    os.environ["DEEPFACE_HOME"] = deepface_home
+
+    from deepface import DeepFace
+
+    result = DeepFace.analyze(
+        img_path=img_bgr,
+        actions=["age"],
+        enforce_detection=False,
+        silent=True,
+    )
+
+    # DeepFace may return a dict or a list containing a dict depending on version.
+    if isinstance(result, list):
+        return float(result[0]["age"])
+    return float(result["age"])
+
+
 def detect_face(img_rgb: np.ndarray):
     """Return (detected: bool, bbox: dict|None). bbox values are normalised 0–1."""
     results = face_detector.process(img_rgb)
@@ -145,6 +189,25 @@ def detect_face(img_rgb: np.ndarray):
     det = results.detections[0]
     bb  = det.location_data.relative_bounding_box
     return True, {"x": bb.xmin, "y": bb.ymin, "w": bb.width, "h": bb.height}
+
+
+def crop_face(img_bgr: np.ndarray, bbox: Optional[dict]) -> np.ndarray:
+    if not bbox:
+        return img_bgr
+
+    height, width = img_bgr.shape[:2]
+    pad_ratio = 0.12
+
+    x1 = max(0, int((bbox["x"] - pad_ratio) * width))
+    y1 = max(0, int((bbox["y"] - pad_ratio) * height))
+    x2 = min(width, int((bbox["x"] + bbox["w"] + pad_ratio) * width))
+    y2 = min(height, int((bbox["y"] + bbox["h"] + pad_ratio) * height))
+
+    if x2 <= x1 or y2 <= y1:
+        return img_bgr
+
+    face = img_bgr[y1:y2, x1:x2]
+    return face if face.size else img_bgr
 
 
 def compute_frame_diff(cur: np.ndarray, prev: np.ndarray) -> float:
@@ -236,6 +299,50 @@ async def process_text(req: TextRequest):
         intent=intent,
         confidence=round(random.uniform(0.82, 0.99), 2),
         session_id=sess_id,
+    )
+
+
+@app.post("/predict-age", response_model=AgePredictionResponse)
+async def predict_age(req: AgeFrameRequest):
+    frames = list(req.frames)
+    if req.image:
+        frames.append(req.image)
+
+    if not frames:
+        raise HTTPException(status_code=400, detail="No frames provided")
+
+    ages: List[float] = []
+    errors: List[str] = []
+    for frame_b64 in frames:
+        try:
+            img_bgr = decode_image(frame_b64)
+            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            face_detected, bbox = detect_face(img_rgb)
+            if not face_detected:
+                errors.append("MediaPipe could not find a face in one frame")
+                continue
+
+            age = predict_age_from_image(crop_face(img_bgr, bbox))
+            ages.append(age)
+        except Exception as exc:
+            # Keep processing other frames, but preserve the real error.
+            errors.append(str(exc))
+            continue
+
+    if not ages:
+        detail = "No usable face frames were found"
+        if errors:
+            detail = f"{detail}. Last error: {errors[-1]}"
+        raise HTTPException(status_code=422, detail=detail)
+
+    avg_age = float(sum(ages) / len(ages))
+    confidence = max(0.0, 100.0 - (float(np.std(ages)) * 10.0))
+
+    return AgePredictionResponse(
+        ages=[round(a, 2) for a in ages],
+        average_age=round(avg_age, 2),
+        frames_processed=len(ages),
+        confidence=round(confidence, 2),
     )
 
 
