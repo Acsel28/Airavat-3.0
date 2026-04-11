@@ -1,10 +1,11 @@
 /**
- * VoiceChat - microphone input via Web Speech API.
- * Captures speech, shows the conversation log, and forwards text to the shared assistant pipeline.
+ * VoiceChat – right panel showing conversation with AI Assistant.
+ * Styled to match the screenshot: white card, message bubbles, STT labels.
  */
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+const SpeechRecognition =
+  window.SpeechRecognition || window.webkitSpeechRecognition;
 
 export default function VoiceChat({
   messages,
@@ -13,179 +14,217 @@ export default function VoiceChat({
   onStateChange,
   onSubmitText,
   onTranscriptChange,
+  avatarState,
+  assistantReply,
 }) {
-  const [listening, setListening] = useState(false)
-  const [transcript, setTranscript] = useState('')
-  const [supported, setSupported] = useState(true)
+  const [listening, setListening] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [supported, setSupported] = useState(true);
+  const [inputText, setInputText] = useState("");
 
-  const recognitionRef = useRef(null)
-  const scrollRef = useRef(null)
-
-  useEffect(() => {
-    if (!SpeechRecognition) setSupported(false)
-  }, [])
+  const recognitionRef = useRef(null);
+  const scrollRef = useRef(null);
 
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-  }, [messages])
+    if (!SpeechRecognition) setSupported(false);
+  }, []);
 
   useEffect(() => {
-    const onKey = (e) => {
-      if (e.code === 'Space' && e.target === document.body && sessionActive) {
-        e.preventDefault()
-        if (listening) stopListening()
-        else startListening()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [listening, sessionActive]) // eslint-disable-line
+    if (scrollRef.current)
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages]);
 
   const startListening = useCallback(() => {
-    if (!SpeechRecognition || listening || !sessionActive || loading) return
-
-    const recognition = new SpeechRecognition()
-    recognitionRef.current = recognition
-    recognition.continuous = false
-    recognition.interimResults = true
-    recognition.lang = 'en-US'
+    if (!SpeechRecognition || listening || !sessionActive || loading) return;
+    const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
 
     recognition.onstart = () => {
-      setListening(true)
-      setTranscript('')
-      onTranscriptChange?.('')
-      onStateChange?.('listening')
-    }
-
+      setListening(true);
+      setTranscript("");
+      onTranscriptChange?.("");
+      onStateChange?.("listening");
+    };
     recognition.onresult = (e) => {
-      let interim = ''
-      let final = ''
-
+      let interim = "",
+        final = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        const value = e.results[i][0].transcript
-        if (e.results[i].isFinal) final += value
-        else interim += value
+        const val = e.results[i][0].transcript;
+        if (e.results[i].isFinal) final += val;
+        else interim += val;
       }
-
-      const nextTranscript = final || interim
-      setTranscript(nextTranscript)
-      onTranscriptChange?.(nextTranscript)
-
+      const next = final || interim;
+      setTranscript(next);
+      onTranscriptChange?.(next);
       if (final.trim()) {
-        recognition.stop()
-        onStateChange?.('listening')
-        onSubmitText?.(final.trim())
+        recognition.stop();
+        onSubmitText?.(final.trim());
       }
-    }
-
+    };
     recognition.onerror = () => {
-      setListening(false)
-      setTranscript('')
-      onTranscriptChange?.('')
-      onStateChange?.('idle')
-    }
-
+      setListening(false);
+      setTranscript("");
+      onTranscriptChange?.("");
+      onStateChange?.("idle");
+    };
     recognition.onend = () => {
-      setListening(false)
-      setTranscript('')
-      onTranscriptChange?.('')
-      // keep avatar state until a reply is received so it remains visible
-    }
+      setListening(false);
+      setTranscript("");
+      onTranscriptChange?.("");
+    };
+    recognition.start();
+  }, [
+    listening,
+    loading,
+    onStateChange,
+    onSubmitText,
+    onTranscriptChange,
+    sessionActive,
+  ]);
 
-    recognition.start()
-  }, [listening, loading, onStateChange, onSubmitText, onTranscriptChange, sessionActive])
+  const stopListening = () => recognitionRef.current?.stop();
 
-  const stopListening = () => recognitionRef.current?.stop()
+  const handleSend = () => {
+    if (!inputText.trim() || !sessionActive || loading) return;
+    onSubmitText?.(inputText.trim());
+    setInputText("");
+  };
 
-  if (!supported) {
-    return (
-      <div className="card-glass rounded-2xl p-5 text-center text-sm text-muted">
-        Web Speech API not supported. Try Chrome or Edge.
-      </div>
-    )
-  }
+  const isSpeaking = avatarState === "speaking";
 
   return (
-    <div className="card-glass rounded-2xl flex flex-col" style={{ minHeight: 340 }}>
-      <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-border/40">
-        <h3 className="text-sm font-display font-semibold text-gray-300 uppercase tracking-widest">Conversation</h3>
-        <div className="flex items-center gap-3">
-          {loading && (
-            <div className="flex items-center gap-1.5 text-xs text-accent2 font-mono">
-              <div className="w-3 h-3 rounded-full border border-accent2 border-t-transparent animate-spin" />
-              thinking...
-            </div>
-          )}
-          <span className="text-[10px] font-mono text-muted/50 hidden sm:block">SPACE to mic</span>
+    <div className="kyc-chat-panel">
+      {/* Header */}
+      <div className="kyc-chat-header">
+        <div className="kyc-chat-agent-avatar">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="white"
+            strokeWidth="2"
+          >
+            <rect x="3" y="8" width="18" height="12" rx="2" />
+            <path d="M8 8V6a4 4 0 0 1 8 0v2" />
+            <circle cx="12" cy="14" r="2" />
+          </svg>
         </div>
-      </div>
-
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3" style={{ maxHeight: 220 }}>
-        {messages.length === 0 && (
-          <div className="text-center text-xs text-muted mt-6 font-body italic">
-            Start a session, type a message above, or hold the mic button to speak.
+        <div className="kyc-chat-agent-info">
+          <div className="kyc-chat-agent-name">AI Assistant</div>
+          <div className="kyc-chat-agent-model">
+            Neural Engine v4.2
+            {loading && (
+              <span className="kyc-chat-generating">
+                {" "}
+                · Generating Offer...
+              </span>
+            )}
+          </div>
+        </div>
+        {loading && (
+          <div className="kyc-chat-spinner">
+            <div className="kyc-spinner" />
           </div>
         )}
-        {messages.map((m, i) => (
-          <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div
-              className={`max-w-[80%] rounded-xl px-3 py-2 text-sm leading-relaxed ${
-                m.role === 'user'
-                  ? 'bg-accent2/20 text-gray-200 border border-accent2/20'
-                  : 'bg-accent/10 text-gray-200 border border-accent/20'
-              }`}
-            >
-              {m.role === 'ai' && (
-                <div className="flex items-center justify-between mb-0.5">
-                  <span className="text-[9px] font-mono text-accent uppercase">AI · {m.intent || 'reply'}</span>
-                  {m.rt ? <span className="text-[9px] font-mono text-muted">{m.rt}ms</span> : null}
-                </div>
-              )}
-              {m.text}
-              {m.suggestions && m.suggestions.length > 0 && (
-                <div className="mt-2 text-xs text-muted">
-                  <div className="font-mono text-[10px] text-accent mb-1">Try asking:</div>
-                  <ul className="list-disc list-inside text-[11px]">
-                    {m.suggestions.map((s, idx) => (
-                      <li key={idx}>{s}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
       </div>
 
-      {transcript && (
-        <div className="mx-4 mb-2 px-3 py-1.5 rounded-lg bg-accent2/10 border border-accent2/20">
-          <p className="text-xs text-accent2 italic">{transcript}...</p>
-        </div>
-      )}
+      {/* Messages */}
+      <div className="kyc-chat-messages" ref={scrollRef}>
+        {messages.length === 0 && (
+          <div className="kyc-chat-empty">
+            {sessionActive
+              ? "Start speaking or type a message below."
+              : "Start a session to begin your KYC verification."}
+          </div>
+        )}
 
-      <div className="px-5 pb-5 pt-3 flex items-center justify-center gap-4">
+        {messages.map((m, i) => (
+          <div
+            key={i}
+            className={`kyc-msg ${m.role === "user" ? "kyc-msg--user" : "kyc-msg--ai"}`}
+          >
+            {m.role === "user" && (
+              <div className="kyc-msg-stt-label">
+                <svg
+                  width="10"
+                  height="10"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                  <line x1="12" y1="19" x2="12" y2="23" />
+                  <line x1="8" y1="23" x2="16" y2="23" />
+                </svg>
+                STT
+              </div>
+            )}
+            <div className="kyc-msg-bubble">{m.text}</div>
+            {m.rt && <div className="kyc-msg-rt">{m.rt}ms</div>}
+          </div>
+        ))}
+
+        {transcript && (
+          <div className="kyc-msg kyc-msg--user kyc-msg--interim">
+            <div className="kyc-msg-stt-label">
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+              STT
+            </div>
+            <div className="kyc-msg-bubble kyc-msg-bubble--interim">
+              {transcript}...
+            </div>
+          </div>
+        )}
+
+        {loading && (
+          <div className="kyc-msg kyc-msg--ai">
+            <div className="kyc-msg-bubble kyc-msg-bubble--typing">
+              <span />
+              <span />
+              <span />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Input area */}
+      <div className="kyc-chat-input-area">
         <button
+          className={`kyc-mic-btn ${listening ? "kyc-mic-btn--active" : ""}`}
           onMouseDown={startListening}
           onMouseUp={stopListening}
           onTouchStart={startListening}
           onTouchEnd={stopListening}
-          disabled={loading || !sessionActive}
-          className={`relative flex items-center justify-center rounded-full transition-all duration-200 cursor-pointer ${
-            listening
-              ? 'w-16 h-16 glow-accent bg-accent/20 border-2 border-accent'
-              : 'w-14 h-14 bg-card border-2 border-border hover:border-accent/50 hover:bg-accent/10'
-          } ${loading || !sessionActive ? 'opacity-40 cursor-not-allowed' : ''}`}
+          disabled={loading || !sessionActive || !supported}
+          title={supported ? "Hold to speak" : "Not supported in this browser"}
         >
-          {listening && <span className="absolute inset-0 rounded-full animate-ping bg-accent/30" />}
+          {listening && <span className="kyc-mic-ping" />}
           <svg
-            width="22"
-            height="22"
+            width="16"
+            height="16"
             viewBox="0 0 24 24"
             fill="none"
-            stroke={listening ? '#6ee7b7' : '#9ca3af'}
+            stroke="currentColor"
             strokeWidth="2"
             strokeLinecap="round"
-            strokeLinejoin="round"
           >
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
             <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
@@ -193,10 +232,42 @@ export default function VoiceChat({
             <line x1="8" y1="23" x2="16" y2="23" />
           </svg>
         </button>
-        <p className="text-xs text-muted font-body">
-          {!sessionActive ? 'Start a session to enable mic' : listening ? 'Listening... release to send' : 'Hold to speak'}
-        </p>
+
+        <input
+          className="kyc-chat-input"
+          type="text"
+          placeholder={
+            sessionActive ? "Type a message..." : "Start session to chat"
+          }
+          value={inputText}
+          onChange={(e) => setInputText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleSend();
+          }}
+          disabled={!sessionActive || loading || isSpeaking}
+        />
+
+        <button
+          className="kyc-send-btn"
+          onClick={handleSend}
+          disabled={
+            !sessionActive || !inputText.trim() || loading || isSpeaking
+          }
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          >
+            <line x1="22" y1="2" x2="11" y2="13" />
+            <polygon points="22 2 15 22 11 13 2 9 22 2" />
+          </svg>
+        </button>
       </div>
     </div>
-  )
+  );
 }
