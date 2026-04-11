@@ -5,17 +5,31 @@ Handles liveness detection, AI text responses, and session tracking.
 
 import base64
 import importlib.metadata
+import json
 import os
 import time
+import urllib.error
+import urllib.request
 import uuid
+import sqlite3
+import json
+import math
 import numpy as np
 import cv2
 import mediapipe as mp
+import face_recognition
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import random
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except Exception:
+    pass
 
 app = FastAPI(title="AI Onboarding Backend", version="1.1.0")
 
@@ -33,12 +47,79 @@ face_detector = mp_face_detection.FaceDetection(
     model_selection=0, min_detection_confidence=0.5
 )
 
+# Realtime tuning knobs
+FRAME_SCALE = 0.5
+AUTHORIZED_COSINE_THRESHOLD = 0.92
+EMBEDDING_DB_PATH = "authorized_embeddings.db"
+VIOLATION_TIMEOUT_SECONDS = 30
+MAX_VIOLATIONS = 3
+
 # ─── In-memory state ─────────────────────────────────────────────────────────
-previous_frame: Optional[np.ndarray] = None
 last_frame_time: float = 0.0
 
 # Session store: session_id → {messages, liveness_samples, created_at}
 sessions: dict = {}
+
+
+def init_embedding_db():
+    conn = sqlite3.connect(EMBEDDING_DB_PATH)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS authorized_embeddings (
+                session_id TEXT PRIMARY KEY,
+                embedding_json TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def save_authorized_embedding(session_id: str, embedding: np.ndarray):
+    conn = sqlite3.connect(EMBEDDING_DB_PATH)
+    try:
+        conn.execute(
+            """
+            INSERT INTO authorized_embeddings(session_id, embedding_json, created_at)
+            VALUES(?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                embedding_json=excluded.embedding_json,
+                created_at=excluded.created_at
+            """,
+            (session_id, json.dumps(embedding.tolist()), time.time()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_authorized_embedding(session_id: str) -> Optional[np.ndarray]:
+    conn = sqlite3.connect(EMBEDDING_DB_PATH)
+    try:
+        row = conn.execute(
+            "SELECT embedding_json FROM authorized_embeddings WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    return np.array(json.loads(row[0]), dtype=np.float32)
+
+
+def delete_authorized_embedding(session_id: str):
+    conn = sqlite3.connect(EMBEDDING_DB_PATH)
+    try:
+        conn.execute("DELETE FROM authorized_embeddings WHERE session_id = ?", (session_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+init_embedding_db()
 
 
 # ─── Models ──────────────────────────────────────────────────────────────────
@@ -54,8 +135,17 @@ class BoundingBox(BaseModel):
 class FrameResponse(BaseModel):
     liveness_score: float
     face_detected: bool
+    face_count: int
     movement_detected: bool
     frame_diff_score: float
+    is_verified: bool
+    security_alert: Optional[str] = None
+    violation_active: bool
+    timer_running: bool
+    violation_count: int
+    violation_seconds_remaining: int
+    meeting_terminated: bool
+    meeting_end_message: Optional[str] = None
     bounding_box: Optional[BoundingBox] = None
     debug: dict
 
@@ -77,11 +167,24 @@ class TextRequest(BaseModel):
     session_id: Optional[str] = "default"
 
 
+class SpeechRequest(BaseModel):
+    text: str
+    voice: str = "marin"
+    instructions: Optional[str] = "Speak in a warm, natural, human-like onboarding assistant voice."
+    response_format: str = "wav"
+
+
+class AvatarTalkRequest(BaseModel):
+    text: str
+
+
 class TextResponse(BaseModel):
     reply: str
     intent: str
     confidence: float
     session_id: str
+    provider: str
+    suggestions: Optional[List[str]] = None
 
 
 class SessionResponse(BaseModel):
@@ -90,6 +193,11 @@ class SessionResponse(BaseModel):
     avg_liveness: float
     duration_seconds: float
     intents: List[str]
+    has_face_embedding: bool
+    security_blocked: bool
+    security_alert_reason: Optional[str] = None
+    violation_count: int
+    meeting_terminated: bool
 
 
 # ─── Onboarding dialogue ─────────────────────────────────────────────────────
@@ -181,33 +289,77 @@ def predict_age_from_image(img_bgr: np.ndarray) -> float:
     return float(result["age"])
 
 
-def detect_face(img_rgb: np.ndarray):
-    """Return (detected: bool, bbox: dict|None). bbox values are normalised 0–1."""
+def detect_faces(img_rgb: np.ndarray):
+    """Return all detected face boxes as normalised dicts (0-1)."""
     results = face_detector.process(img_rgb)
     if not results.detections:
+        return []
+
+    boxes = []
+    for det in results.detections:
+        bb = det.location_data.relative_bounding_box
+        boxes.append({"x": bb.xmin, "y": bb.ymin, "w": bb.width, "h": bb.height})
+    return boxes
+
+
+def detect_face(img_rgb: np.ndarray):
+    """Compatibility helper: return (detected, first_bbox)."""
+    boxes = detect_faces(img_rgb)
+    if not boxes:
         return False, None
-    det = results.detections[0]
-    bb  = det.location_data.relative_bounding_box
-    return True, {"x": bb.xmin, "y": bb.ymin, "w": bb.width, "h": bb.height}
+    return True, boxes[0]
 
 
-def crop_face(img_bgr: np.ndarray, bbox: Optional[dict]) -> np.ndarray:
-    if not bbox:
-        return img_bgr
+def crop_face(img_bgr: np.ndarray, bbox: dict, pad_ratio: float = 0.15) -> np.ndarray:
+    """Crop face region with a small padding margin."""
+    h, w = img_bgr.shape[:2]
+    x = int(bbox["x"] * w)
+    y = int(bbox["y"] * h)
+    bw = int(bbox["w"] * w)
+    bh = int(bbox["h"] * h)
 
-    height, width = img_bgr.shape[:2]
-    pad_ratio = 0.12
+    pad_x = int(bw * pad_ratio)
+    pad_y = int(bh * pad_ratio)
 
-    x1 = max(0, int((bbox["x"] - pad_ratio) * width))
-    y1 = max(0, int((bbox["y"] - pad_ratio) * height))
-    x2 = min(width, int((bbox["x"] + bbox["w"] + pad_ratio) * width))
-    y2 = min(height, int((bbox["y"] + bbox["h"] + pad_ratio) * height))
+    x1 = max(0, x - pad_x)
+    y1 = max(0, y - pad_y)
+    x2 = min(w, x + bw + pad_x)
+    y2 = min(h, y + bh + pad_y)
 
     if x2 <= x1 or y2 <= y1:
         return img_bgr
+    return img_bgr[y1:y2, x1:x2]
 
-    face = img_bgr[y1:y2, x1:x2]
-    return face if face.size else img_bgr
+
+def compute_cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    a_norm = np.linalg.norm(a)
+    b_norm = np.linalg.norm(b)
+    if a_norm == 0 or b_norm == 0:
+        return 0.0
+    return float(np.dot(a, b) / (a_norm * b_norm))
+
+
+def extract_face_embedding(img_rgb: np.ndarray, bbox: dict) -> Optional[np.ndarray]:
+    """Extract robust 128D embedding from a single detected face box."""
+    h, w, _ = img_rgb.shape
+    left = max(0, int(bbox["x"] * w))
+    top = max(0, int(bbox["y"] * h))
+    right = min(w, int((bbox["x"] + bbox["w"]) * w))
+    bottom = min(h, int((bbox["y"] + bbox["h"]) * h))
+
+    if right <= left or bottom <= top:
+        return None
+
+    # face_recognition expects location order: (top, right, bottom, left).
+    encodings = face_recognition.face_encodings(
+        img_rgb,
+        known_face_locations=[(top, right, bottom, left)],
+        num_jitters=1,
+        model="small",
+    )
+    if not encodings:
+        return None
+    return np.array(encodings[0], dtype=np.float32)
 
 
 def compute_frame_diff(cur: np.ndarray, prev: np.ndarray) -> float:
@@ -223,47 +375,310 @@ def compute_liveness(face: bool, movement: bool, diff: float) -> float:
     if movement: s += 0.3
     s += 0.3 * min(diff, 1.0)
     return round(min(s, 1.0), 3)
-#mkcdd    
+
+
+def resize_for_realtime(img_bgr: np.ndarray) -> np.ndarray:
+    if FRAME_SCALE >= 1.0:
+        return img_bgr
+    h, w = img_bgr.shape[:2]
+    return cv2.resize(
+        img_bgr,
+        (max(1, int(w * FRAME_SCALE)), max(1, int(h * FRAME_SCALE))),
+        interpolation=cv2.INTER_AREA,
+    )
 
 def get_or_create_session(session_id: str) -> dict:
     if session_id not in sessions:
+        stored_embedding = load_authorized_embedding(session_id)
         sessions[session_id] = {
             "messages": [],
             "liveness_samples": [],
             "intents": [],
+            "authorized_embedding": stored_embedding,
+            "previous_gray_frame": None,
+            "violation_active": False,
+            "timer_running": False,
+            "violation_count": 0,
+            "violation_start_time": None,
+            "meeting_terminated": False,
+            "meeting_end_message": None,
             "created_at": time.time(),
         }
     return sessions[session_id]
 
 
+def build_fallback_reply(text: str, intent: str) -> str:
+    cleaned = text.strip()
+    if cleaned:
+        return f"I heard you say: {cleaned}. Tell me a little more so I can help with the next onboarding step."
+    replies = ONBOARDING_RESPONSES.get(intent, ONBOARDING_RESPONSES["default"])
+    return random.choice(replies)
+
+
+def generate_ai_reply(text: str) -> tuple[str, str]:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return build_fallback_reply(text, classify_intent(text)), "fallback"
+    try:
+        # Lazy import - Gemini client may not be installed in all environments
+        from google import genai
+    except Exception:
+        return build_fallback_reply(text, classify_intent(text)), "fallback"
+
+    try:
+        client = genai.Client(api_key=api_key)
+        prompt = (
+            "You are a warm onboarding assistant. "
+            "Reply conversationally in 1 to 3 short sentences, staying helpful and natural. "
+            "Avoid generic filler and directly address the specific user message. "
+            "User message: "
+            f"{text}"
+        )
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        reply = getattr(response, "text", "") or ""
+        if not reply.strip():
+            raise HTTPException(status_code=502, detail="Gemini returned an empty reply")
+        return reply.strip(), "gemini"
+    except Exception:
+        return build_fallback_reply(text, classify_intent(text)), "fallback"
+
+
+def generate_speech_audio(text: str, voice: str, instructions: Optional[str], response_format: str) -> bytes:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured on the backend")
+
+    payload = {
+        "model": "gpt-4o-mini-tts",
+        "input": text,
+        "voice": voice,
+        "response_format": response_format,
+    }
+    if instructions:
+        payload["instructions"] = instructions
+
+    request = urllib.request.Request(
+        url="https://api.openai.com/v1/audio/speech",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=90) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=exc.code, detail=f"TTS request failed: {detail}")
+    except urllib.error.URLError as exc:
+        raise HTTPException(status_code=502, detail=f"TTS request failed: {exc.reason}")
+
+
+def did_request(path: str, method: str = "GET", payload: Optional[dict] = None) -> dict:
+    api_key = os.getenv("DID_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="DID_API_KEY is not configured on the backend")
+
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url=f"https://api.d-id.com{path}",
+        data=body,
+        headers={
+            "Authorization": f"Basic {api_key}",
+            "Content-Type": "application/json",
+        },
+        method=method,
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=120) as resp:
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=exc.code, detail=f"D-ID request failed: {detail}")
+    except urllib.error.URLError as exc:
+        raise HTTPException(status_code=502, detail=f"D-ID request failed: {exc.reason}")
+
+
+def create_did_talk(text: str) -> dict:
+    source_url = os.getenv("DID_SOURCE_URL")
+    if not source_url:
+        raise HTTPException(status_code=503, detail="DID_SOURCE_URL is not configured on the backend")
+
+    payload = {
+        "source_url": source_url,
+        "script": {
+            "type": "text",
+            "subtitles": "false",
+            "provider": {
+                "type": "microsoft",
+                "voice_id": os.getenv("DID_VOICE_ID", "en-US-JennyNeural"),
+            },
+            "input": text,
+        },
+        "config": {
+            "fluent": True,
+            "pad_audio": 0.0,
+        },
+    }
+
+    talk = did_request("/talks", method="POST", payload=payload)
+    talk_id = talk.get("id")
+    if not talk_id:
+        raise HTTPException(status_code=502, detail="D-ID did not return a talk id")
+
+    for _ in range(40):
+        status = did_request(f"/talks/{talk_id}")
+        if status.get("status") == "done":
+            return status
+        if status.get("status") in {"error", "rejected"}:
+            raise HTTPException(status_code=502, detail=f"D-ID talk failed: {status}")
+        time.sleep(2)
+
+    raise HTTPException(status_code=504, detail="D-ID talk generation timed out")
+
+
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 @app.post("/analyze-frame", response_model=FrameResponse)
 async def analyze_frame(req: FrameRequest):
-    global previous_frame, last_frame_time
+    global last_frame_time
 
     try:
         img_bgr = decode_image(req.image)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
 
-    img_rgb  = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    # Resize once for all realtime operations (face + movement + embedding).
+    img_bgr_small = resize_for_realtime(img_bgr)
+    img_rgb  = cv2.cvtColor(img_bgr_small, cv2.COLOR_BGR2RGB)
+    img_gray = cv2.cvtColor(img_bgr_small, cv2.COLOR_BGR2GRAY)
 
-    face_detected, bbox = detect_face(img_rgb)
+    boxes = detect_faces(img_rgb)
+    face_count = len(boxes)
+    face_detected = face_count > 0
+    bbox = boxes[0] if boxes else None
+
+    sess = get_or_create_session(req.session_id or "default")
 
     frame_diff_score = 0.0
     movement_detected = False
-    if previous_frame is not None:
-        frame_diff_score  = compute_frame_diff(img_gray, previous_frame)
+    if sess["previous_gray_frame"] is not None:
+        frame_diff_score  = compute_frame_diff(img_gray, sess["previous_gray_frame"])
         movement_detected = frame_diff_score > 0.01
 
-    previous_frame  = img_gray.copy()
+    sess["previous_gray_frame"] = img_gray.copy()
     last_frame_time = time.time()
+
+    security_alert = None
+    is_verified = False
+    similarity = None
+    meeting_end_message = None
+
+    if sess["meeting_terminated"]:
+        return FrameResponse(
+            liveness_score=compute_liveness(face_detected, movement_detected, frame_diff_score),
+            face_detected=face_detected,
+            face_count=face_count,
+            movement_detected=movement_detected,
+            frame_diff_score=round(frame_diff_score, 4),
+            is_verified=False,
+            security_alert="meeting_ended",
+            violation_active=False,
+            timer_running=False,
+            violation_count=sess["violation_count"],
+            violation_seconds_remaining=0,
+            meeting_terminated=True,
+            meeting_end_message=sess["meeting_end_message"] or "Meeting ended due to multiple identity violations.",
+            bounding_box=BoundingBox(**bbox) if bbox else None,
+            debug={
+                "img_shape": list(img_bgr_small.shape),
+                "timestamp": last_frame_time,
+                "cosine_similarity": None,
+                "has_reference_embedding": sess["authorized_embedding"] is not None,
+                "security_blocked": True,
+                "security_alert_reason": "meeting_ended",
+                "cosine_threshold": AUTHORIZED_COSINE_THRESHOLD,
+                "frame_scale": FRAME_SCALE,
+            },
+        )
+
+    # Strict identity lock: compare only with the original session-authorized embedding.
+    if face_count == 0:
+        security_alert = "no_face"
+    elif face_count > 1:
+        security_alert = "multiple_faces"
+    elif face_count == 1:
+        current_embedding = extract_face_embedding(img_rgb, boxes[0])
+        if current_embedding is None:
+            security_alert = "embedding_failed"
+        elif sess["authorized_embedding"] is None:
+            # Enrollment step: first valid single face becomes authorized identity.
+            sess["authorized_embedding"] = current_embedding
+            save_authorized_embedding(req.session_id or "default", current_embedding)
+            is_verified = True
+        else:
+            similarity = compute_cosine_similarity(sess["authorized_embedding"], current_embedding)
+            if similarity >= AUTHORIZED_COSINE_THRESHOLD:
+                is_verified = True
+            else:
+                security_alert = "different_person"
+
+    valid_face = is_verified and security_alert is None
+    now_ts = time.time()
+
+    if valid_face:
+        # Original authorized face returned: clear violation + stop grace timer.
+        sess["violation_active"] = False
+        sess["timer_running"] = False
+        sess["violation_start_time"] = None
+    else:
+        # Count violation immediately only once per violation event.
+        if not sess["violation_active"]:
+            sess["violation_count"] += 1
+            sess["violation_active"] = True
+            sess["timer_running"] = True
+            sess["violation_start_time"] = now_ts
+
+            if sess["violation_count"] >= MAX_VIOLATIONS:
+                sess["meeting_terminated"] = True
+                sess["meeting_end_message"] = "Meeting ended due to multiple identity violations."
+                sess["timer_running"] = False
+                sess["violation_active"] = False
+                sess["violation_start_time"] = None
+                security_alert = "meeting_ended"
+                meeting_end_message = sess["meeting_end_message"]
+                is_verified = False
+        elif sess["timer_running"] and sess["violation_start_time"] is not None:
+            elapsed = now_ts - float(sess["violation_start_time"])
+            if elapsed >= VIOLATION_TIMEOUT_SECONDS:
+                # Grace period expired while still invalid -> terminate immediately.
+                sess["meeting_terminated"] = True
+                sess["meeting_end_message"] = "Meeting ended due to multiple identity violations."
+                sess["timer_running"] = False
+                sess["violation_active"] = False
+                sess["violation_start_time"] = None
+                security_alert = "meeting_ended"
+                meeting_end_message = sess["meeting_end_message"]
+                is_verified = False
+
+    if security_alert:
+        is_verified = False
+
+    remaining_seconds = 0
+    if sess["timer_running"] and sess["violation_start_time"] is not None:
+        elapsed = now_ts - float(sess["violation_start_time"])
+        remaining_seconds = max(0, int(math.ceil(VIOLATION_TIMEOUT_SECONDS - elapsed)))
 
     liveness = compute_liveness(face_detected, movement_detected, frame_diff_score)
 
     # Record liveness in session
-    sess = get_or_create_session(req.session_id or "default")
     sess["liveness_samples"].append(liveness)
     # Keep only last 100 samples
     if len(sess["liveness_samples"]) > 100:
@@ -272,10 +687,30 @@ async def analyze_frame(req: FrameRequest):
     return FrameResponse(
         liveness_score=liveness,
         face_detected=face_detected,
+        face_count=face_count,
         movement_detected=movement_detected,
         frame_diff_score=round(frame_diff_score, 4),
+        is_verified=is_verified,
+        security_alert=security_alert,
+        violation_active=sess["violation_active"],
+        timer_running=sess["timer_running"],
+        violation_count=sess["violation_count"],
+        violation_seconds_remaining=remaining_seconds,
+        meeting_terminated=sess["meeting_terminated"],
+        meeting_end_message=meeting_end_message or sess["meeting_end_message"],
         bounding_box=BoundingBox(**bbox) if bbox else None,
-        debug={"img_shape": list(img_bgr.shape), "timestamp": last_frame_time},
+        debug={
+            "img_shape": list(img_bgr_small.shape),
+            "timestamp": last_frame_time,
+            "cosine_similarity": round(similarity, 4) if similarity is not None else None,
+            "has_reference_embedding": sess["authorized_embedding"] is not None,
+            "security_blocked": sess["meeting_terminated"],
+            "security_alert_reason": security_alert,
+            "cosine_threshold": AUTHORIZED_COSINE_THRESHOLD,
+            "frame_scale": FRAME_SCALE,
+            "violation_timeout_seconds": VIOLATION_TIMEOUT_SECONDS,
+            "max_violations": MAX_VIOLATIONS,
+        },
     )
 
 
@@ -285,8 +720,7 @@ async def process_text(req: TextRequest):
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
     intent  = classify_intent(req.text)
-    replies = ONBOARDING_RESPONSES.get(intent, ONBOARDING_RESPONSES["default"])
-    reply   = random.choice(replies)
+    reply, provider = generate_ai_reply(req.text)
 
     sess_id = req.session_id or str(uuid.uuid4())
     sess    = get_or_create_session(sess_id)
@@ -294,12 +728,66 @@ async def process_text(req: TextRequest):
     sess["messages"].append({"role": "assistant",  "text": reply,    "ts": time.time()})
     sess["intents"].append(intent)
 
+    # Provide optional follow-up suggestions when intent is vague/default.
+    suggestions = None
+    if intent == "default":
+        suggestions = [
+            "Can you tell me your role and experience?",
+            "What would you like to learn about the platform?",
+            "Do you have any questions about onboarding steps?",
+        ]
+
     return TextResponse(
         reply=reply,
         intent=intent,
         confidence=round(random.uniform(0.82, 0.99), 2),
         session_id=sess_id,
+        provider=provider,
+        suggestions=suggestions,
     )
+
+
+@app.post("/api/avatar/talk")
+async def avatar_talk(req: AvatarTalkRequest):
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+    talk = create_did_talk(text)
+    result_url = talk.get("result_url") or talk.get("audio_url")
+    if not result_url:
+        raise HTTPException(status_code=502, detail=f"D-ID did not return a playable result: {talk}")
+
+    return {
+        "id": talk.get("id"),
+        "status": talk.get("status"),
+        "result_url": result_url,
+    }
+
+
+@app.post("/api/speak")
+async def speak_text(req: SpeechRequest):
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+    audio_bytes = generate_speech_audio(
+        text=text,
+        voice=req.voice,
+        instructions=req.instructions,
+        response_format=req.response_format,
+    )
+
+    media_type = {
+        "mp3": "audio/mpeg",
+        "wav": "audio/wav",
+        "opus": "audio/ogg",
+        "aac": "audio/aac",
+        "flac": "audio/flac",
+        "pcm": "application/octet-stream",
+    }.get(req.response_format, "audio/wav")
+
+    return Response(content=audio_bytes, media_type=media_type)
 
 
 @app.post("/predict-age", response_model=AgePredictionResponse)
@@ -360,12 +848,18 @@ async def get_session(session_id: str):
         avg_liveness=avg_live,
         duration_seconds=round(time.time() - sess["created_at"], 1),
         intents=sess["intents"],
+        has_face_embedding=sess["authorized_embedding"] is not None,
+        security_blocked=sess["meeting_terminated"],
+        security_alert_reason=sess["meeting_end_message"],
+        violation_count=sess["violation_count"],
+        meeting_terminated=sess["meeting_terminated"],
     )
 
 
 @app.delete("/session/{session_id}")
 async def clear_session(session_id: str):
     sessions.pop(session_id, None)
+    delete_authorized_embedding(session_id)
     return {"deleted": session_id}
 
 
