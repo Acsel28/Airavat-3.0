@@ -160,7 +160,7 @@ def compute_liveness(face: bool, movement: bool, diff: float) -> float:
     if movement: s += 0.3
     s += 0.3 * min(diff, 1.0)
     return round(min(s, 1.0), 3)
-
+#mkcdd    
 
 def get_or_create_session(session_id: str) -> dict:
     if session_id not in sessions:
