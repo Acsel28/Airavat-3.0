@@ -198,7 +198,7 @@ export default function WebcamFeed({ onLivenessUpdate, onSecurityState, onAgeUpd
       clearInterval(timerRef.current)
     }
 
-    if (cameraReady) {
+    if (active && cameraReady) {
       captureAndPredictAge()
       ageTimerRef.current = setInterval(captureAndPredictAge, AGE_PREDICTION_INTERVAL_MS)
     } else {
@@ -212,11 +212,24 @@ export default function WebcamFeed({ onLivenessUpdate, onSecurityState, onAgeUpd
   }, [active, cameraReady, captureAndAnalyze, captureAndPredictAge])
 
   return (
-    <div className="relative w-full rounded-2xl overflow-hidden bg-surface border border-border"
+    <div className="relative w-full rounded-2xl overflow-hidden bg-surface border border-border kyc-webcam-aspect"
       style={{ aspectRatio: '4/3' }}>
-      <video ref={videoRef} muted playsInline className="w-full h-full object-cover"
-        style={{ transform: 'scaleX(-1)' }} />
-      <canvas ref={overlayCanvas} className="absolute inset-0 w-full h-full pointer-events-none" />
+      <video
+        ref={videoRef}
+        muted
+        playsInline
+        className="w-full h-full object-cover transition-opacity duration-200"
+        style={{
+          transform: 'scaleX(-1)',
+          opacity: active ? 1 : 0,
+          visibility: active ? 'visible' : 'hidden',
+        }}
+      />
+      <canvas
+        ref={overlayCanvas}
+        className="absolute inset-0 w-full h-full pointer-events-none transition-opacity duration-200"
+        style={{ opacity: active ? 1 : 0, visibility: active ? 'visible' : 'hidden' }}
+      />
       <canvas ref={captureCanvas} className="hidden" />
 
       {cameraError && (
@@ -232,7 +245,7 @@ export default function WebcamFeed({ onLivenessUpdate, onSecurityState, onAgeUpd
           </div>
         </div>
       )}
-      {cameraReady && (
+      {cameraReady && active && (
         <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-ink/70 px-2 py-1 rounded-full backdrop-blur-sm">
           <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
           <span className="text-xs font-mono text-accent">LIVE</span>
@@ -244,11 +257,6 @@ export default function WebcamFeed({ onLivenessUpdate, onSecurityState, onAgeUpd
             <p className="text-xs font-mono text-muted">Session paused</p>
             <p className="text-[10px] text-muted/60 mt-1">Press Start Session to begin analysis</p>
           </div>
-        </div>
-      )}
-      {cameraReady && (
-        <div className="absolute bottom-3 right-3 bg-ink/70 px-2 py-1 rounded backdrop-blur-sm">
-          <span className="text-[10px] font-mono text-muted/70">SPACE = mic</span>
         </div>
       )}
     </div>

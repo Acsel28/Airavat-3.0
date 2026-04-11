@@ -22,6 +22,8 @@ import face_recognition
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+
+from user_me import get_me as get_me_endpoint
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import random
@@ -34,12 +36,25 @@ except Exception:
 
 app = FastAPI(title="AI Onboarding Backend", version="1.1.0")
 
+_cors_origins = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://localhost",
+).split(",")
+_cors_origins = [o.strip() for o in _cors_origins if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins or ["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+app.add_api_route(
+    "/get_me",
+    get_me_endpoint,
+    methods=["GET"],
+    tags=["auth"],
 )
 
 # ─── MediaPipe ───────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, DateTime, Date
+from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, DateTime, Date, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.dialects.postgresql import UUID
@@ -49,6 +49,17 @@ class KYCUser(Base):
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class VideoSession(Base):
+    __tablename__ = "video_session"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(UUID(as_uuid=True), unique=True, nullable=False, index=True)
+    user_name = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    is_completed = Column(Boolean, nullable=False, default=False)
+
 
 # Create tables
 Base.metadata.create_all(bind=engine)

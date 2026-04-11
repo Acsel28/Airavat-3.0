@@ -14,6 +14,7 @@ import WebcamFeed from "./components/WebcamFeed.jsx";
 import TalkingAvatar from "./components/TalkingAvatar.jsx";
 import VoiceChat from "./components/VoiceChat.jsx";
 import DataExtractionPanel from "./components/DataExtractionPanel.jsx";
+import { VIDEO_SESSION_ACCESS_STORAGE_KEY } from "./sessionAuth.js";
 
 // ─── Session ID ───────────────────────────────────────────────────────────────
 function createSessionId() {
@@ -127,6 +128,7 @@ export default function App() {
     monthlyIncome: null,
     loanPurpose: null,
   });
+  const [sessionUserName, setSessionUserName] = useState(null);
 
   const synthRef = useRef(
     typeof window !== "undefined" ? window.speechSynthesis : null,
@@ -134,6 +136,36 @@ export default function App() {
   const audioRef = useRef(null);
   const audioUrlRef = useRef(null);
   const sessionTime = useSessionTimer(sessionActive);
+
+  // Verified KYC name from JWT (video chat flow) while session is live
+  useEffect(() => {
+    if (!sessionActive) {
+      setSessionUserName(null);
+      return;
+    }
+    const token = sessionStorage.getItem(VIDEO_SESSION_ACCESS_STORAGE_KEY);
+    if (!token) {
+      setSessionUserName(null);
+      return;
+    }
+    let cancelled = false;
+    fetch("/get_me", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.full_name) return;
+        setSessionUserName(data.full_name);
+        setExtractedData((prev) => ({
+          ...prev,
+          fullName: prev.fullName || data.full_name,
+        }));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionActive]);
 
   // ── Cleanup on unmount ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -475,6 +507,9 @@ export default function App() {
             <span>
               KYC<strong>Verify</strong>
             </span>
+            {sessionActive && sessionUserName && (
+              <span className="kyc-topbar-user">Hi, {sessionUserName}</span>
+            )}
           </div>
         </div>
 

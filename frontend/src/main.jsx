@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import App from "./App.jsx";
 import KYC from "./kyc.jsx";
+import VideoChat from "./VideoChat.jsx";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
@@ -11,6 +12,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <Routes>
         <Route path="/" element={<App />} />
         <Route path="/kyc" element={<KYC />} />
+        <Route path="/video_chat" element={<VideoChat />} />
       </Routes>
     </BrowserRouter>
   </React.StrictMode>,

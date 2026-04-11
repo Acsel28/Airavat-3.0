@@ -12,6 +12,7 @@ export default defineConfig({
       '/process-text': 'http://localhost:8000',
       '/predict-age': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
+      '/get_me': 'http://localhost:8000',
     },
   },
 })
