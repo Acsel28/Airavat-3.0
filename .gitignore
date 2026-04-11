@@ -6,3 +6,9 @@ venv/
 __pycache__/
 **/*.pyc
 *.pyc
+# local face embedding db
+backend/authorized_embeddings.db
+*.db
+authorized_embeddings.db
+**/authorized_embeddings.db
+
