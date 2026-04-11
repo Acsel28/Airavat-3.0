@@ -1,20 +1,47 @@
-/**
- * App - root layout for AI Video Onboarding MVP.
- * Wires: webcam -> liveness, assistant replies -> speaking avatar, voice + text -> shared conversation flow.
- */
-import React, { useCallback, useEffect, useRef, useState } from 'react'
-import WebcamFeed from './components/WebcamFeed.jsx'
-import LivenessPanel from './components/LivenessPanel.jsx'
-import TalkingAvatar from './components/TalkingAvatar.jsx'
-import VoiceChat from './components/VoiceChat.jsx'
-import OnboardingProgress from './components/OnboardingProgress.jsx'
-import AnalyticsPanel from './components/AnalyticsPanel.jsx'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import VideoPanel from './components/VideoPanel.jsx'
+import ChatPanel from './components/ChatPanel.jsx'
+import TrustPanel from './components/TrustPanel.jsx'
+import ProgressBar from './components/ProgressBar.jsx'
 
 function createSessionId() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID()
   }
   return `session-${Date.now()}`
+}
+
+function mapSecurityMessage(alertType) {
+  switch (alertType) {
+    case 'multiple_faces':
+      return 'Multiple people detected. Please ensure only you are in the frame.'
+    case 'no_face':
+      return 'We can’t see you. Please face the camera.'
+    case 'different_person':
+      return 'Face mismatch detected. Please verify identity.'
+    case 'meeting_ended':
+      return 'Session ended due to repeated violations.'
+    default:
+      return ''
+  }
+}
+
+function deriveStage({ sessionActive, data, messages, completedIntents, meetingTerminated }) {
+  if (!sessionActive && messages.length === 0) return 'intro'
+  if (meetingTerminated) return 'verification'
+  if (!data?.is_verified || !data?.face_detected) return 'verification'
+  if (completedIntents.includes('done') || messages.length >= 6) return 'decision'
+  return 'questioning'
+}
+
+function deriveDecision({ livenessScore, violationCount, meetingTerminated, faceVerified }) {
+  const approved = !meetingTerminated && faceVerified && livenessScore >= 65 && violationCount < 2
+  return {
+    approved,
+    amount: approved ? 280000 : 120000,
+    emi: approved ? 8240 : 5410,
+    tenure: approved ? 36 : 24,
+  }
 }
 
 export default function App() {
@@ -25,6 +52,7 @@ export default function App() {
   const [transcript, setTranscript] = useState('')
   const [lastUserText, setLastUserText] = useState('')
   const [assistantReply, setAssistantReply] = useState('')
+  const [assistantProvider, setAssistantProvider] = useState('')
   const [avatarVideoUrl, setAvatarVideoUrl] = useState('')
   const [inputText, setInputText] = useState('')
   const [sessionId, setSessionId] = useState(createSessionId)
@@ -42,6 +70,7 @@ export default function App() {
   const [violationSecondsRemaining, setViolationSecondsRemaining] = useState(0)
   const [meetingTerminated, setMeetingTerminated] = useState(false)
   const [meetingEndMessage, setMeetingEndMessage] = useState('')
+  const [showDecisionWhy, setShowDecisionWhy] = useState(false)
 
   const synthRef = useRef(typeof window !== 'undefined' ? window.speechSynthesis : null)
   const audioRef = useRef(null)
@@ -58,6 +87,65 @@ export default function App() {
         URL.revokeObjectURL(audioUrlRef.current)
       }
     }
+  }, [])
+
+  const livenessScore = livenessData ? Math.round((livenessData.liveness_score || 0) * 100) : 0
+  const securityMessage = mapSecurityMessage(securityAlertType)
+
+  const fraudScore = useMemo(() => {
+    const penalty = (violationCount * 18) + (livenessData?.security_alert && livenessData.security_alert !== 'none' ? 22 : 0)
+    return Math.min(100, penalty)
+  }, [livenessData, violationCount])
+
+  const riskScore = useMemo(() => {
+    const base = 100 - livenessScore
+    return Math.min(100, Math.max(0, Math.round((base * 0.55) + fraudScore * 0.45)))
+  }, [fraudScore, livenessScore])
+
+  const stage = useMemo(
+    () =>
+      deriveStage({
+        sessionActive,
+        data: livenessData,
+        messages,
+        completedIntents,
+        meetingTerminated,
+      }),
+    [sessionActive, livenessData, messages, completedIntents, meetingTerminated]
+  )
+
+  const progressStep = stage === 'intro'
+    ? 'identity'
+    : stage === 'verification'
+    ? 'verification'
+    : stage === 'questioning'
+    ? 'financial'
+    : 'decision'
+
+  const decision = useMemo(
+    () =>
+      deriveDecision({
+        livenessScore,
+        violationCount,
+        meetingTerminated,
+        faceVerified: Boolean(livenessData?.is_verified),
+      }),
+    [livenessData, livenessScore, meetingTerminated, violationCount]
+  )
+
+  const decisionReady = stage === 'decision'
+
+  const appendMessage = useCallback((message) => {
+    setMessages((prev) => {
+      const next = [...prev, { ...message, timestamp: Date.now() }]
+      setMessageCount(next.length)
+      return next
+    })
+  }, [])
+
+  const handleIntent = useCallback((intent) => {
+    setCurrentIntent(intent)
+    setCompletedIntents((prev) => (prev.includes(intent) ? prev : [...prev, intent]))
   }, [])
 
   const handleLiveness = useCallback((data) => {
@@ -89,19 +177,6 @@ export default function App() {
     setViolationSecondsRemaining(data?.violation_seconds_remaining || 0)
   }, [])
 
-  const handleIntent = useCallback((intent) => {
-    setCurrentIntent(intent)
-    setCompletedIntents((prev) => (prev.includes(intent) ? prev : [...prev, intent]))
-  }, [])
-
-  const appendMessage = useCallback((message) => {
-    setMessages((prev) => {
-      const next = [...prev, message]
-      setMessageCount(next.length)
-      return next
-    })
-  }, [])
-
   const speakReplyFallback = useCallback((text) => {
     const synth = synthRef.current
     if (!synth || !text) {
@@ -114,17 +189,9 @@ export default function App() {
     utterance.rate = 0.96
     utterance.pitch = 1.02
     utterance.volume = 1
-
-    const voices = synth.getVoices()
-    const preferred = voices.find(
-      (voice) => voice.lang === 'en-US' || voice.name.includes('Google') || voice.name.includes('Samantha')
-    )
-    if (preferred) utterance.voice = preferred
-
     utterance.onstart = () => setAvatarState('speaking')
     utterance.onend = () => setAvatarState('idle')
     utterance.onerror = () => setAvatarState('idle')
-
     synth.speak(utterance)
   }, [])
 
@@ -134,55 +201,8 @@ export default function App() {
       return
     }
 
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current.currentTime = 0
-    }
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current)
-      audioUrlRef.current = null
-    }
-
-    try {
-      const res = await fetch('/api/speak', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text,
-          voice: 'marin',
-          instructions: 'Speak warmly, naturally, and conversationally like a polished human onboarding assistant.',
-          response_format: 'wav',
-        }),
-      })
-
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`)
-      }
-
-      const blob = await res.blob()
-      if (!blob.size) {
-        throw new Error('Empty audio response')
-      }
-
-      const audio = audioRef.current || new Audio()
-      audioRef.current = audio
-
-      const url = URL.createObjectURL(blob)
-      audioUrlRef.current = url
-
-      audio.src = url
-      audio.onplay = () => setAvatarState('speaking')
-      audio.onended = () => setAvatarState('idle')
-      audio.onerror = () => {
-        setAvatarState('idle')
-        speakReplyFallback(text)
-      }
-
-      await audio.play()
-    } catch (err) {
-      console.warn('Backend TTS unavailable, using browser fallback:', err)
-      speakReplyFallback(text)
-    }
+    // Gemini handles text responses; use browser speech fallback for audio when D-ID is unavailable.
+    speakReplyFallback(text)
   }, [speakReplyFallback])
 
   const submitText = useCallback(async (providedText) => {
@@ -193,6 +213,7 @@ export default function App() {
     setTranscript('')
     setLastUserText(text)
     setAssistantReply('')
+    setAssistantProvider('')
     setAvatarVideoUrl('')
     setInputText('')
     appendMessage({ role: 'user', text })
@@ -205,10 +226,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, session_id: sessionId }),
       })
-
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`)
-      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
       const data = await res.json()
       const responseTime = Date.now() - startedAt
@@ -219,17 +237,24 @@ export default function App() {
       })
 
       setAssistantReply(data.reply)
+      setAssistantProvider(data.provider || '')
       handleIntent(data.intent)
-      appendMessage({ role: 'ai', text: data.reply, intent: data.intent, rt: responseTime, suggestions: data.suggestions })
+      appendMessage({
+        role: 'ai',
+        text: data.reply,
+        intent: data.intent,
+        provider: data.provider,
+        rt: responseTime,
+        suggestions: data.suggestions,
+      })
+
       try {
         const avatarRes = await fetch('/api/avatar/talk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: data.reply }),
         })
-        if (!avatarRes.ok) {
-          throw new Error(`HTTP ${avatarRes.status}`)
-        }
+        if (!avatarRes.ok) throw new Error(`HTTP ${avatarRes.status}`)
         const avatarData = await avatarRes.json()
         setAvatarVideoUrl(avatarData.result_url || '')
       } catch (avatarErr) {
@@ -241,7 +266,8 @@ export default function App() {
       console.error('Assistant error:', err)
       const fallback = 'Sorry, I had trouble responding just now. Please try again.'
       setAssistantReply(fallback)
-      appendMessage({ role: 'ai', text: fallback })
+      setAssistantProvider('fallback')
+      appendMessage({ role: 'ai', text: fallback, provider: 'fallback' })
       setAvatarVideoUrl('')
       await speakReply(fallback)
     } finally {
@@ -261,6 +287,7 @@ export default function App() {
       setMessageCount(0)
       setResponseTimes([])
       setLivenessSamples([])
+      setMessages([])
       setLivenessData(null)
       setAgeData(null)
       setAgeError('')
@@ -268,189 +295,192 @@ export default function App() {
       setTranscript('')
       setLastUserText('')
       setAssistantReply('')
+      setAssistantProvider('')
       setAvatarVideoUrl('')
       setInputText('')
-      setMessages([])
       setLoading(false)
-      setSessionId(createSessionId())
       setIsSecurityAlertActive(false)
       setSecurityAlertType('none')
       setViolationCount(0)
       setViolationSecondsRemaining(0)
       setMeetingTerminated(false)
       setMeetingEndMessage('')
+      setShowDecisionWhy(false)
+      setSessionId(createSessionId())
     }
     setSessionActive((value) => !value)
   }
 
-  const livenessScore = livenessData ? Math.round(livenessData.liveness_score * 100) : 0
-
   return (
-    <div className="min-h-screen bg-ink font-body text-gray-200 flex flex-col">
-      <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        <div
-          className="absolute top-[-20%] left-[-10%] w-[600px] h-[600px] rounded-full"
-          style={{ background: 'radial-gradient(circle, rgba(110,231,183,0.055) 0%, transparent 65%)' }}
-        />
-        <div
-          className="absolute bottom-[-15%] right-[-5%] w-[500px] h-[500px] rounded-full"
-          style={{ background: 'radial-gradient(circle, rgba(129,140,248,0.065) 0%, transparent 65%)' }}
-        />
-        <div
-          className="absolute top-[40%] left-[50%] w-[300px] h-[300px] rounded-full"
-          style={{ background: 'radial-gradient(circle, rgba(251,191,36,0.025) 0%, transparent 65%)' }}
-        />
-      </div>
+    <div className="min-h-screen bg-slate-900 text-slate-100">
+      <div className="fixed inset-0 pointer-events-none bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.16),_transparent_32%),radial-gradient(circle_at_bottom_right,_rgba(168,85,247,0.16),_transparent_30%)]" />
 
-      <header className="relative z-10 flex items-center justify-between px-6 lg:px-8 py-4 border-b border-border/50 backdrop-blur-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-accent2 flex items-center justify-center flex-shrink-0">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0a0a0f" strokeWidth="2.5">
-              <circle cx="12" cy="8" r="4" />
-              <path d="M20 21a8 8 0 1 0-16 0" />
-            </svg>
-          </div>
-          <div>
-            <span className="font-display font-bold text-lg tracking-tight leading-none block">
-              on<span className="text-gradient">board</span>.ai
-            </span>
-            <span className="text-[10px] font-mono text-muted leading-none">AI-powered onboarding</span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <div
-            className={`hidden sm:flex items-center gap-2 text-xs font-mono px-3 py-1.5 rounded-full border transition-all ${
-              sessionActive ? 'border-accent/40 text-accent bg-accent/10' : 'border-border text-muted bg-surface'
-            }`}
-          >
-            <span className={`w-1.5 h-1.5 rounded-full ${sessionActive ? 'bg-accent animate-pulse' : 'bg-muted'}`} />
-            {sessionActive ? 'Session active' : 'Ready'}
-          </div>
-          <button
-            onClick={toggleSession}
-            className="text-xs font-display font-semibold px-4 py-1.5 rounded-full transition-all cursor-pointer"
-            style={{
-              background: sessionActive ? 'transparent' : 'linear-gradient(135deg, #6ee7b7, #818cf8)',
-              color: sessionActive ? '#f87171' : '#0a0a0f',
-              border: sessionActive ? '1px solid rgba(248,113,113,0.6)' : 'none',
-            }}
-          >
-            {sessionActive ? 'End Session' : 'Start Session'}
-          </button>
-        </div>
-      </header>
-
-      <main className="relative z-10 flex-1 grid grid-cols-1 lg:grid-cols-3 gap-5 p-5 max-w-7xl mx-auto w-full">
-        <div className="lg:col-span-2 flex flex-col gap-4">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-mono text-muted uppercase tracking-widest">Camera Feed</span>
-            <div className="flex-1 h-px bg-border/50" />
-            <span className="text-[10px] font-mono text-muted/50">2s analysis interval</span>
+      <div className="relative z-10 mx-auto flex min-h-screen max-w-[1600px] flex-col px-5 py-5 lg:px-8">
+        <header className="mb-5 flex flex-col gap-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-[10px] font-mono uppercase tracking-[0.32em] text-slate-500">AI Onboarding</p>
+              <h1 className="text-2xl font-semibold text-white lg:text-3xl">Loan Verification Intelligence Hub</h1>
+            </div>
+            <button
+              onClick={toggleSession}
+              className={`rounded-full px-5 py-3 text-sm font-semibold transition ${
+                sessionActive
+                  ? 'border border-rose-400/30 bg-rose-400/10 text-rose-100 hover:bg-rose-400/15'
+                  : 'bg-gradient-to-r from-indigo-500 to-violet-500 text-white shadow-lg shadow-indigo-500/20 hover:scale-[1.02]'
+              }`}
+            >
+              {sessionActive ? 'End Session' : 'Start Session'}
+            </button>
           </div>
 
-          <WebcamFeed
+          <ProgressBar current={progressStep} />
+
+          {isSecurityAlertActive && !meetingTerminated && (
+            <div className="rounded-2xl border border-amber-400/30 bg-amber-400/10 px-5 py-4 text-sm text-amber-100 shadow-lg">
+              <p className="font-semibold">Attention needed</p>
+              <p className="mt-1">{securityMessage}</p>
+              <p className="mt-2 text-xs font-mono uppercase tracking-[0.22em] text-amber-200/70">
+                Violations {violationCount}/3 · timer {violationSecondsRemaining}s
+              </p>
+            </div>
+          )}
+        </header>
+
+        <main className="grid flex-1 grid-cols-1 gap-5 xl:grid-cols-[1.05fr_1.25fr_0.95fr]">
+          <VideoPanel
+            sessionActive={sessionActive}
+            sessionId={sessionId}
+            avatarState={avatarState}
+            avatarVideoUrl={avatarVideoUrl}
+            assistantReply={assistantReply}
             onLivenessUpdate={handleLiveness}
             onSecurityState={handleSecurityState}
             onAgeUpdate={setAgeData}
             onAgeError={setAgeError}
-            active={sessionActive}
-            sessionId={sessionId}
           />
 
-          <div className="card-glass rounded-xl px-5 py-3 flex items-center gap-4">
-            <span className="text-xs font-mono text-muted whitespace-nowrap w-24">Liveness</span>
-            <div className="flex-1 h-1.5 bg-border rounded-full overflow-hidden">
-              <div
-                className="h-full rounded-full transition-all duration-700"
-                style={{
-                  width: `${livenessScore}%`,
-                  background:
-                    livenessScore >= 70
-                      ? 'linear-gradient(90deg, #34d399, #6ee7b7)'
-                      : livenessScore >= 40
-                      ? 'linear-gradient(90deg, #f59e0b, #fbbf24)'
-                      : 'linear-gradient(90deg, #ef4444, #f87171)',
-                }}
-              />
-            </div>
-            <span
-              className="text-sm font-display font-bold w-8 text-right"
-              style={{ color: livenessScore >= 70 ? '#6ee7b7' : livenessScore >= 40 ? '#fbbf24' : '#f87171' }}
-            >
-              {livenessScore}
-            </span>
-          </div>
-
-          <AnalyticsPanel
-            sessionActive={sessionActive}
-            messageCount={messageCount}
-            responseTimes={responseTimes}
-            livenessSamples={livenessSamples}
-          />
-        </div>
-
-        <div className="flex flex-col gap-4">
-          <TalkingAvatar
-            state={avatarState}
-            transcript={transcript}
-            lastUserText={lastUserText}
-            assistantReply={assistantReply}
-            avatarVideoUrl={avatarVideoUrl}
-            sessionId={sessionId}
-            inputText={inputText}
-            loading={loading}
-            sessionActive={sessionActive}
-            onInputChange={setInputText}
-            onSubmitText={() => submitText()}
-            onVideoPlay={() => setAvatarState('speaking')}
-            onVideoEnd={() => setAvatarState('idle')}
-          />
-
-          <OnboardingProgress
-            currentIntent={currentIntent}
-            completedIntents={completedIntents}
-          />
-
-          <LivenessPanel data={livenessData} ageData={ageData} ageError={ageError} />
-
-          <VoiceChat
+          <ChatPanel
             messages={messages}
             loading={loading}
             sessionActive={sessionActive}
-            onStateChange={setAvatarState}
+            inputText={inputText}
+            onInputChange={setInputText}
             onSubmitText={submitText}
+            onStateChange={setAvatarState}
             onTranscriptChange={setTranscript}
           />
-        </div>
-      </main>
 
-      {isSecurityAlertActive && (
-        <div className="fixed inset-0 z-50 bg-ink/95 backdrop-blur-sm flex items-center justify-center p-6">
-          <div className="max-w-xl w-full rounded-2xl border border-red-400/40 bg-red-500/10 p-8 text-center">
-            <h2 className="text-2xl font-display font-bold text-red-300">Security Alert</h2>
-            <p className="mt-3 text-base text-red-100">
-              {meetingTerminated
-                ? meetingEndMessage || 'Meeting ended due to multiple identity violations.'
-                : securityAlertType === 'multiple_faces'
-                ? 'Multiple faces detected. Only one participant should be visible.'
-                : 'Face not valid. Please return to the camera within 30 seconds or the meeting will end.'}
-            </p>
-            <p className="mt-2 text-xs font-mono text-red-200/80">Reason: {securityAlertType || 'none'}</p>
-            <p className="mt-4 text-xs text-red-100/80">
-              {meetingTerminated
-                ? 'Start a new session to continue.'
-                : `Timer: ${violationSecondsRemaining}s · Violations: ${violationCount}/3`}
-            </p>
+          <TrustPanel
+            data={livenessData}
+            ageData={ageData}
+            ageError={ageError}
+            riskScore={riskScore}
+            fraudScore={fraudScore}
+            violationCount={violationCount}
+            securityMessage={securityMessage}
+          />
+        </main>
+
+        {decisionReady && (
+          <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-slate-950/75 p-6 backdrop-blur-sm">
+            <div className="pointer-events-auto w-full max-w-3xl rounded-[2rem] border border-white/10 bg-slate-900/95 p-8 shadow-2xl">
+              <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-[10px] font-mono uppercase tracking-[0.32em] text-slate-500">Decision Ready</p>
+                  <h2 className={`mt-2 text-3xl font-semibold ${decision.approved ? 'text-emerald-300' : 'text-amber-300'}`}>
+                    {decision.approved ? 'Approved with conditions' : 'Further review recommended'}
+                  </h2>
+                  <p className="mt-3 max-w-xl text-sm leading-6 text-slate-300">
+                    {decision.approved
+                      ? 'The onboarding signals are strong enough to present a preliminary offer. Review the terms below and continue.'
+                      : 'We need a little more verification confidence before locking the final terms. You can still review the provisional structure.'}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-3 text-right">
+                  <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-slate-500">Current Stage</p>
+                  <p className="mt-1 text-sm font-semibold text-white capitalize">{stage}</p>
+                </div>
+              </div>
+
+              <div className="mt-8 grid gap-4 md:grid-cols-3">
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
+                  <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-slate-500">Loan Amount</p>
+                  <p className="mt-2 text-3xl font-semibold text-white">₹{decision.amount.toLocaleString('en-IN')}</p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
+                  <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-slate-500">Estimated EMI</p>
+                  <p className="mt-2 text-3xl font-semibold text-white">₹{decision.emi.toLocaleString('en-IN')}</p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
+                  <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-slate-500">Tenure</p>
+                  <p className="mt-2 text-3xl font-semibold text-white">{decision.tenure} months</p>
+                </div>
+              </div>
+
+              <div className="mt-6 flex flex-wrap gap-3">
+                <button className="rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 px-5 py-3 text-sm font-semibold text-white transition hover:scale-[1.02]">
+                  Accept Offer
+                </button>
+                <button className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:border-violet-400/40 hover:bg-violet-500/10">
+                  Negotiate
+                </button>
+                <button
+                  onClick={() => setShowDecisionWhy((value) => !value)}
+                  className="rounded-full border border-indigo-400/30 bg-indigo-500/10 px-5 py-3 text-sm font-semibold text-indigo-100 transition hover:bg-indigo-500/15"
+                >
+                  Why this decision?
+                </button>
+              </div>
+
+              {showDecisionWhy && (
+                <div className="mt-6 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
+                    <p className="text-[10px] font-mono uppercase tracking-[0.22em] text-slate-500">Income Verification</p>
+                    <p className="mt-2 text-sm text-slate-200">Question flow completed with stable session confidence and response consistency.</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
+                    <p className="text-[10px] font-mono uppercase tracking-[0.22em] text-slate-500">Credit Score Proxy</p>
+                    <p className="mt-2 text-sm text-slate-200">Financial discussion stage reached with no critical conversation blockers.</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
+                    <p className="text-[10px] font-mono uppercase tracking-[0.22em] text-slate-500">Fraud Signals</p>
+                    <p className="mt-2 text-sm text-slate-200">Risk score {riskScore}% with {violationCount} recorded violation events.</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
+                    <p className="text-[10px] font-mono uppercase tracking-[0.22em] text-slate-500">Identity Match</p>
+                    <p className="mt-2 text-sm text-slate-200">
+                      {livenessData?.is_verified ? 'Verified against enrolled session face.' : 'Identity confidence still needs more signal.'}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      <footer className="relative z-10 text-center py-3 border-t border-border/30">
-        <p className="text-[10px] font-mono text-muted/40">
-          AI Video Onboarding MVP · MediaPipe · Web Speech API · FastAPI
-        </p>
-      </footer>
+        {meetingTerminated && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 p-6 backdrop-blur-sm">
+            <div className="w-full max-w-lg rounded-[2rem] border border-rose-400/30 bg-rose-500/10 p-8 text-center shadow-2xl">
+              <p className="text-[10px] font-mono uppercase tracking-[0.3em] text-rose-200/70">Session Alert</p>
+              <h2 className="mt-3 text-3xl font-semibold text-rose-200">Session ended due to repeated violations.</h2>
+              <p className="mt-3 text-sm leading-6 text-rose-100/90">
+                {meetingEndMessage || 'Session ended due to repeated violations.'}
+              </p>
+              <button
+                onClick={() => {
+                  setMeetingTerminated(false)
+                  setIsSecurityAlertActive(false)
+                }}
+                className="mt-6 rounded-full border border-white/10 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/15"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
