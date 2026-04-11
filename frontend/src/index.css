@@ -975,3 +975,231 @@ body {
   background: #e5e7eb;
   border-radius: 2px;
 }
+
+/* ─── Security Banner (inline, non-blocking) ──────────────────────────── */
+.kyc-security-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #fffbeb;
+  border-bottom: 1px solid #fde68a;
+  padding: 10px 20px;
+  font-size: 13px;
+  color: #92400e;
+}
+.kyc-security-banner strong {
+  font-weight: 700;
+}
+.kyc-security-banner svg {
+  stroke: #d97706;
+  flex-shrink: 0;
+}
+.kyc-banner-meta {
+  margin-left: auto;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: #b45309;
+  white-space: nowrap;
+}
+
+/* ─── Agent Stage Badge ───────────────────────────────────────────────── */
+.kyc-agent-stage {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 20px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-family: "JetBrains Mono", monospace;
+  color: rgba(255, 255, 255, 0.85);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: 2px;
+}
+
+/* ─── Decision Modal ──────────────────────────────────────────────────── */
+.kyc-decision-card {
+  background: #fff;
+  border-radius: 20px;
+  border: 1px solid #e5e7eb;
+  padding: 32px;
+  max-width: 680px;
+  width: 100%;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.kyc-decision-header {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.kyc-decision-eyebrow {
+  font-size: 10.5px;
+  font-family: "JetBrains Mono", monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #9ca3af;
+  margin-bottom: 6px;
+}
+
+.kyc-decision-title {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.kyc-decision-title--approved {
+  color: #16a34a;
+}
+.kyc-decision-title--review {
+  color: #d97706;
+}
+
+.kyc-decision-desc {
+  font-size: 13.5px;
+  color: #6b7280;
+  line-height: 1.6;
+  max-width: 420px;
+}
+
+.kyc-decision-stage-badge {
+  flex-shrink: 0;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 10px 16px;
+  text-align: right;
+  min-width: 110px;
+}
+.kyc-decision-stage-label {
+  font-size: 10px;
+  font-family: "JetBrains Mono", monospace;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.kyc-decision-stage-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: #111827;
+  text-transform: capitalize;
+  margin-top: 3px;
+}
+
+.kyc-decision-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.kyc-decision-stat {
+  background: #f9fafb;
+  border: 1px solid #f3f4f6;
+  border-radius: 12px;
+  padding: 16px;
+}
+.kyc-decision-stat-label {
+  font-size: 10.5px;
+  font-family: "JetBrains Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9ca3af;
+  margin-bottom: 6px;
+}
+.kyc-decision-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.kyc-decision-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.kyc-decision-btn {
+  padding: 9px 20px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  font-family: "DM Sans", sans-serif;
+  transition: all 0.2s;
+}
+.kyc-decision-btn--accept {
+  background: #16a34a;
+  color: white;
+}
+.kyc-decision-btn--accept:hover {
+  background: #15803d;
+}
+.kyc-decision-btn--negotiate {
+  background: #f9fafb;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+}
+.kyc-decision-btn--negotiate:hover {
+  background: #f3f4f6;
+}
+.kyc-decision-btn--why {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+.kyc-decision-btn--why:hover {
+  background: #dbeafe;
+}
+
+.kyc-decision-why {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.kyc-why-card {
+  background: #f9fafb;
+  border: 1px solid #f3f4f6;
+  border-radius: 10px;
+  padding: 14px;
+}
+.kyc-why-label {
+  font-size: 10.5px;
+  font-family: "JetBrains Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9ca3af;
+  margin-bottom: 5px;
+}
+.kyc-why-text {
+  font-size: 13px;
+  color: #374151;
+  line-height: 1.5;
+}
+
+/* ─── Alert card dismiss button ───────────────────────────────────────── */
+.kyc-alert-card--terminated h2 {
+  color: #dc2626;
+}
+
+.kyc-alert-dismiss {
+  margin-top: 16px;
+  padding: 8px 20px;
+  border-radius: 20px;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: "DM Sans", sans-serif;
+  transition: background 0.2s;
+}
+.kyc-alert-dismiss:hover {
+  background: #e5e7eb;
+}

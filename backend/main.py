@@ -7,6 +7,7 @@ import base64
 import importlib.metadata
 import json
 import os
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -176,6 +177,16 @@ class SpeechRequest(BaseModel):
 
 class AvatarTalkRequest(BaseModel):
     text: str
+
+
+class STTRequest(BaseModel):
+    audio: str  # data URL or raw base64 audio payload
+    language: Optional[str] = "en"
+
+
+class STTResponse(BaseModel):
+    text: str
+    provider: str
 
 
 class TextResponse(BaseModel):
@@ -447,25 +458,63 @@ def generate_ai_reply(text: str) -> tuple[str, str]:
 
 
 def generate_speech_audio(text: str, voice: str, instructions: Optional[str], response_format: str) -> bytes:
-    api_key = os.getenv("OPENAI_API_KEY")
+    provider = os.getenv("TTS_PROVIDER", "local").strip().lower()
+
+    if provider == "local":
+        try:
+            from TTS.api import TTS  # type: ignore
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Local TTS is unavailable. Install `TTS` or set TTS_PROVIDER=elevenlabs.",
+            ) from exc
+
+        model_name = os.getenv("COQUI_TTS_MODEL", "tts_models/en/ljspeech/tacotron2-DDC")
+        try:
+            model = TTS(model_name=model_name, progress_bar=False, gpu=False)
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                temp_path = tmp.name
+            try:
+                model.tts_to_file(text=text, file_path=temp_path)
+                with open(temp_path, "rb") as f:
+                    return f.read()
+            finally:
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Local TTS generation failed: {exc}") from exc
+
+    api_key = os.getenv("ELEVENLABS_API_KEY")
     if not api_key:
-        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured on the backend")
+        raise HTTPException(status_code=503, detail="ELEVENLABS_API_KEY is not configured on the backend")
+
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")
+    model_id = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
+
+    output_format = "mp3_44100_128"
+    if response_format == "wav":
+        output_format = "pcm_44100"
 
     payload = {
-        "model": "gpt-4o-mini-tts",
-        "input": text,
-        "voice": voice,
-        "response_format": response_format,
+        "text": text,
+        "model_id": model_id,
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+            "style": 0.15,
+            "use_speaker_boost": True,
+        },
     }
-    if instructions:
-        payload["instructions"] = instructions
 
     request = urllib.request.Request(
-        url="https://api.openai.com/v1/audio/speech",
+        url=f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format={output_format}",
         data=json.dumps(payload).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {api_key}",
+            "xi-api-key": api_key,
             "Content-Type": "application/json",
+            "Accept": "audio/mpeg" if output_format.startswith("mp3") else "audio/wav",
         },
         method="POST",
     )
@@ -475,9 +524,112 @@ def generate_speech_audio(text: str, voice: str, instructions: Optional[str], re
             return resp.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
-        raise HTTPException(status_code=exc.code, detail=f"TTS request failed: {detail}")
+        raise HTTPException(status_code=exc.code, detail=f"ElevenLabs TTS request failed: {detail}")
     except urllib.error.URLError as exc:
-        raise HTTPException(status_code=502, detail=f"TTS request failed: {exc.reason}")
+        raise HTTPException(status_code=502, detail=f"ElevenLabs TTS request failed: {exc.reason}")
+
+
+def transcribe_audio_with_local_model(audio_b64: str, language: Optional[str]) -> str:
+    try:
+        from faster_whisper import WhisperModel  # type: ignore
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Local STT is unavailable. Install `faster-whisper` or set STT_PROVIDER=deepgram.",
+        ) from exc
+
+    if "," in audio_b64:
+        header, payload = audio_b64.split(",", 1)
+    else:
+        header, payload = "", audio_b64
+
+    try:
+        audio_bytes = base64.b64decode(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid base64 audio payload: {exc}") from exc
+
+    suffix = ".webm"
+    if "audio/wav" in header or "audio/x-wav" in header:
+        suffix = ".wav"
+    elif "audio/mp3" in header or "audio/mpeg" in header:
+        suffix = ".mp3"
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        temp_path = tmp.name
+        tmp.write(audio_bytes)
+
+    model_size = os.getenv("WHISPER_MODEL_SIZE", "tiny")
+    compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
+
+    try:
+        model = WhisperModel(model_size, device="cpu", compute_type=compute_type)
+        segments, _ = model.transcribe(temp_path, language=(language or None), vad_filter=True)
+        text = " ".join(seg.text.strip() for seg in segments if getattr(seg, "text", "").strip()).strip()
+        if not text:
+            raise HTTPException(status_code=422, detail="No speech recognized in audio")
+        return text
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Local STT failed: {exc}") from exc
+    finally:
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+
+
+def transcribe_audio_with_deepgram(audio_b64: str, language: Optional[str]) -> str:
+    api_key = os.getenv("DEEPGRAM_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="DEEPGRAM_API_KEY is not configured on the backend")
+
+    if "," in audio_b64:
+        header, payload = audio_b64.split(",", 1)
+    else:
+        header, payload = "", audio_b64
+
+    try:
+        audio_bytes = base64.b64decode(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid base64 audio payload: {exc}") from exc
+
+    content_type = "audio/webm"
+    if "audio/wav" in header or "audio/x-wav" in header:
+        content_type = "audio/wav"
+    elif "audio/mp3" in header or "audio/mpeg" in header:
+        content_type = "audio/mpeg"
+
+    query_lang = f"&language={language}" if language else ""
+    request = urllib.request.Request(
+        url=f"https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&punctuate=true{query_lang}",
+        data=audio_bytes,
+        headers={
+            "Authorization": f"Token {api_key}",
+            "Content-Type": content_type,
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=90) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+            data = json.loads(raw)
+            text = (
+                data.get("results", {})
+                .get("channels", [{}])[0]
+                .get("alternatives", [{}])[0]
+                .get("transcript", "")
+                .strip()
+            )
+            if not text:
+                raise HTTPException(status_code=422, detail="No speech recognized in audio")
+            return text
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=exc.code, detail=f"Deepgram STT request failed: {detail}")
+    except urllib.error.URLError as exc:
+        raise HTTPException(status_code=502, detail=f"Deepgram STT request failed: {exc.reason}")
 
 
 def did_request(path: str, method: str = "GET", payload: Optional[dict] = None) -> dict:
@@ -788,6 +940,20 @@ async def speak_text(req: SpeechRequest):
     }.get(req.response_format, "audio/wav")
 
     return Response(content=audio_bytes, media_type=media_type)
+
+
+@app.post("/api/stt", response_model=STTResponse)
+async def speech_to_text(req: STTRequest):
+    if not req.audio.strip():
+        raise HTTPException(status_code=400, detail="Audio payload cannot be empty")
+
+    provider = os.getenv("STT_PROVIDER", "local").strip().lower()
+    if provider == "local":
+        text = transcribe_audio_with_local_model(req.audio, req.language)
+        return STTResponse(text=text, provider="faster-whisper")
+
+    text = transcribe_audio_with_deepgram(req.audio, req.language)
+    return STTResponse(text=text, provider="deepgram")
 
 
 @app.post("/predict-age", response_model=AgePredictionResponse)
