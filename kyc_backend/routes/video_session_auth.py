@@ -1,5 +1,6 @@
 import re
 import uuid
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
@@ -8,8 +9,15 @@ from sqlalchemy.orm import Session
 
 from database import KYCUser, VideoSession, get_db
 from services.jwt_auth import COOKIE_NAME, create_video_session_token, decode_video_session_token
+from compare_embeddings import cosine_similarity, load_session_embeddings, to_float_vector
 
 router = APIRouter()
+
+FACE_MATCH_THRESHOLD = 0.92
+BACKEND_EMBEDDING_DB_PATH = os.getenv(
+    "BACKEND_EMBEDDING_DB_PATH",
+    os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "backend", "authorized_embeddings.db")),
+)
 
 
 def _normalize_aadhaar(value: str) -> str:
@@ -18,6 +26,63 @@ def _normalize_aadhaar(value: str) -> str:
 
 def _normalize_name(value: str) -> str:
     return " ".join((value or "").split()).lower()
+
+
+def _build_face_match_payload(user_embedding, session_id: str):
+    if user_embedding is None:
+        return None
+
+    try:
+        user_vector = to_float_vector(user_embedding)
+    except Exception:
+        return None
+
+    try:
+        session_embeddings = load_session_embeddings(BACKEND_EMBEDDING_DB_PATH, session_id=session_id)
+    except Exception:
+        return {
+            "session_id": session_id,
+            "available": False,
+            "reason": "backend_embedding_db_unavailable",
+            "threshold": FACE_MATCH_THRESHOLD,
+        }
+
+    if not session_embeddings:
+        return {
+            "session_id": session_id,
+            "available": False,
+            "reason": "session_embedding_not_found",
+            "threshold": FACE_MATCH_THRESHOLD,
+        }
+
+    try:
+        similarity = cosine_similarity(user_vector, session_embeddings[0].vector)
+    except Exception:
+        return {
+            "session_id": session_id,
+            "available": False,
+            "reason": "embedding_shape_mismatch",
+            "threshold": FACE_MATCH_THRESHOLD,
+        }
+
+    percentage = round(similarity * 100, 2)
+    return {
+        "session_id": session_id,
+        "available": True,
+        "similarity": round(similarity, 6),
+        "percentage": percentage,
+        "is_match": similarity >= FACE_MATCH_THRESHOLD,
+        "threshold": FACE_MATCH_THRESHOLD,
+    }
+
+
+def _serialize_embedding(user_embedding):
+    if user_embedding is None:
+        return None
+    try:
+        return to_float_vector(user_embedding).tolist()
+    except Exception:
+        return None
 
 
 class VerifyAadhaarBody(BaseModel):
@@ -125,7 +190,10 @@ def get_me(
         "full_name": user.full_name,
         "email": user.email,
         "mobile_number": user.mobile_number,
+        "date_of_birth": user.date_of_birth.isoformat() if user.date_of_birth else None,
         "session_id": str(sid),
+        "face_embedding": _serialize_embedding(user.embedding),
+        "face_match": _build_face_match_payload(user.embedding, str(sid)),
         "video_session": {
             "user_name": vs.user_name,
             "created_at": vs.created_at.isoformat() if vs.created_at else None,

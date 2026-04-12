@@ -14,13 +14,25 @@ import WebcamFeed from "./components/WebcamFeed.jsx";
 import TalkingAvatar from "./components/TalkingAvatar.jsx";
 import VoiceChat from "./components/VoiceChat.jsx";
 import DataExtractionPanel from "./components/DataExtractionPanel.jsx";
-import { VIDEO_SESSION_ACCESS_STORAGE_KEY } from "./sessionAuth.js";
+
+const KYC_API = import.meta.env.VITE_KYC_API_URL || "http://localhost:8001";
+const APP_SESSION_ID_STORAGE_KEY = "app_onboarding_session_id";
 
 // ─── Session ID ───────────────────────────────────────────────────────────────
 function createSessionId() {
   if (typeof crypto !== "undefined" && crypto.randomUUID)
     return crypto.randomUUID();
   return `session-${Date.now()}`;
+}
+
+function getInitialSessionId() {
+  try {
+    const saved = sessionStorage.getItem(APP_SESSION_ID_STORAGE_KEY);
+    if (saved) return saved;
+  } catch (_) {
+    // Ignore storage failures (private mode, quota, etc).
+  }
+  return createSessionId();
 }
 
 // ─── Session Timer ────────────────────────────────────────────────────────────
@@ -96,6 +108,7 @@ function deriveDecision({
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function App() {
+  const currentYear = new Date().getFullYear();
   const [livenessData, setLivenessData] = useState(null);
   const [ageData, setAgeData] = useState(null);
   const [ageError, setAgeError] = useState("");
@@ -106,7 +119,7 @@ export default function App() {
   const [assistantProvider, setAssistantProvider] = useState(""); // teammate
   const [avatarVideoUrl, setAvatarVideoUrl] = useState("");
   const [inputText, setInputText] = useState("");
-  const [sessionId, setSessionId] = useState(createSessionId);
+  const [sessionId, setSessionId] = useState(getInitialSessionId);
   const [sessionActive, setSessionActive] = useState(false);
   const [currentIntent, setCurrentIntent] = useState("greeting");
   const [completedIntents, setCompletedIntents] = useState([]);
@@ -124,9 +137,12 @@ export default function App() {
   const [showDecisionWhy, setShowDecisionWhy] = useState(false); // teammate
   const [extractedData, setExtractedData] = useState({
     fullName: null,
+    dateOfBirth: null,
     age: null,
     monthlyIncome: null,
     loanPurpose: null,
+    faceMatchLabel: null,
+    faceMatchPercentage: null,
   });
   const [sessionUserName, setSessionUserName] = useState(null);
 
@@ -137,33 +153,73 @@ export default function App() {
   const audioUrlRef = useRef(null);
   const sessionTime = useSessionTimer(sessionActive);
 
-  // Verified KYC name from JWT (video chat flow) while session is live
   useEffect(() => {
-    if (!sessionActive) {
-      setSessionUserName(null);
-      return;
+    try {
+      if (sessionId) {
+        sessionStorage.setItem(APP_SESSION_ID_STORAGE_KEY, sessionId);
+      }
+    } catch (_) {
+      // Ignore storage failures.
     }
-    const token = sessionStorage.getItem(VIDEO_SESSION_ACCESS_STORAGE_KEY);
-    if (!token) {
-      setSessionUserName(null);
-      return;
-    }
+  }, [sessionId]);
+
+  // Pull verified KYC profile after redirect from video session page.
+  useEffect(() => {
+    const readProfile = async () => {
+      const r = await fetch(`${KYC_API}/get_me`, {
+        credentials: "include",
+      });
+      if (!r.ok) return null;
+      return r.json();
+    };
+
     let cancelled = false;
-    fetch("/get_me", {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
+    const pull = async () => {
+      try {
+        const data = await readProfile();
         if (cancelled || !data?.full_name) return;
         setSessionUserName(data.full_name);
+        if (data?.session_id) {
+          setSessionId(data.session_id);
+        }
+
+        const faceMatch = data?.face_match;
+        let faceMatchLabel = null;
+        let faceMatchPercentage = null;
+        if (
+          sessionActive &&
+          faceMatch?.available &&
+          typeof faceMatch?.percentage === "number"
+        ) {
+          faceMatchPercentage = faceMatch.percentage;
+          faceMatchLabel = faceMatch.is_match ? "Match" : "No match";
+        }
+
         setExtractedData((prev) => ({
           ...prev,
           fullName: prev.fullName || data.full_name,
+          dateOfBirth: data?.date_of_birth || prev.dateOfBirth,
+          faceMatchLabel: sessionActive
+            ? faceMatchLabel || prev.faceMatchLabel || "Pending capture"
+            : null,
+          faceMatchPercentage,
         }));
-      })
-      .catch(() => {});
+      } catch (_) {
+        if (cancelled) return;
+        setSessionUserName(null);
+      }
+    };
+
+    pull();
+    const timer = setInterval(() => {
+      if (sessionActive) {
+        pull();
+      }
+    }, 3000);
+
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
   }, [sessionActive]);
 
@@ -478,13 +534,37 @@ export default function App() {
       setSessionId(createSessionId());
       setExtractedData({
         fullName: null,
+        dateOfBirth: null,
         age: null,
         monthlyIncome: null,
         loanPurpose: null,
+        faceMatchLabel: null,
+        faceMatchPercentage: null,
       });
+    } else {
+      setExtractedData((prev) => ({
+        ...prev,
+        faceMatchLabel: "Pending capture",
+        faceMatchPercentage: null,
+      }));
     }
     setSessionActive((v) => !v);
   };
+
+  const ageApproval = useMemo(() => {
+    const estimated = Math.round(ageData?.average_age || 0);
+    const dob = extractedData?.dateOfBirth;
+    if (!sessionActive || !dob || !estimated) return null;
+    const birthYear = Number(String(dob).slice(0, 4));
+    if (!birthYear) return null;
+    const realAge = currentYear - birthYear;
+    const within = Math.abs(estimated - realAge) <= 10;
+    return {
+      approved: within,
+      realAge,
+      estimatedAge: estimated,
+    };
+  }, [ageData, currentYear, extractedData?.dateOfBirth, sessionActive]);
 
   // ────────────────────────────────────────────────────────────────────────────
   return (
@@ -659,6 +739,8 @@ export default function App() {
             extractedData={extractedData}
             ageData={ageData}
             messages={messages}
+            sessionActive={sessionActive}
+            ageApproval={ageApproval}
           />
         </aside>
 

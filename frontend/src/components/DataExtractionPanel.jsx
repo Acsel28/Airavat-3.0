@@ -15,7 +15,7 @@ function ConfidenceBar({ value, color }) {
   );
 }
 
-function DataField({ icon, label, value, confidence, onEdit }) {
+function DataField({ icon, label, value, confidence, onEdit, showConfidence = true }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || "");
   const [localValue, setLocalValue] = useState(value);
@@ -85,7 +85,7 @@ function DataField({ icon, label, value, confidence, onEdit }) {
           {localValue || <span className="kyc-data-empty">Waiting...</span>}
         </div>
       )}
-      {localValue && (
+      {localValue && showConfidence && (
         <>
           <ConfidenceBar value={localConf || 0} color={color} />
           <span className="kyc-conf-pct" style={{ color }}>
@@ -101,6 +101,8 @@ export default function DataExtractionPanel({
   extractedData,
   ageData,
   messages,
+  sessionActive,
+  ageApproval,
 }) {
   // Derive values from messages and extractedData
   const [derived, setDerived] = useState({
@@ -112,6 +114,8 @@ export default function DataExtractionPanel({
     monthlyIncomeConf: 0,
     loanPurpose: null,
     loanPurposeConf: 0,
+    face: null,
+    faceConf: 0,
   });
 
   useEffect(() => {
@@ -179,15 +183,38 @@ export default function DataExtractionPanel({
         next.loanPurpose = extractedData.loanPurpose;
         next.loanPurposeConf = 94;
       }
+      if (
+        sessionActive &&
+        extractedData?.faceMatchLabel &&
+        typeof extractedData?.faceMatchPercentage === "number"
+      ) {
+        next.face = `${extractedData.faceMatchLabel} (${extractedData.faceMatchPercentage.toFixed(2)}%)`;
+        next.faceConf = Math.max(0, Math.min(100, extractedData.faceMatchPercentage));
+      } else if (sessionActive && extractedData?.faceMatchLabel) {
+        next.face = extractedData.faceMatchLabel;
+        next.faceConf = 0;
+      } else {
+        next.face = null;
+        next.faceConf = 0;
+      }
       return next;
     });
-  }, [messages, ageData, extractedData]);
+  }, [messages, ageData, extractedData, sessionActive]);
+
+  const ageStatusText = ageApproval
+    ? ageApproval.approved
+      ? "\u2713 Approved"
+      : "\u2717 Not approved"
+    : sessionActive
+      ? "Pending"
+      : null;
 
   const filledCount = [
     derived.fullName,
-    derived.age,
+    ageApproval ? ageStatusText : null,
     derived.monthlyIncome,
     derived.loanPurpose,
+    derived.face,
   ].filter(Boolean).length;
 
   return (
@@ -216,11 +243,11 @@ export default function DataExtractionPanel({
         <div className="kyc-extraction-progress-bar">
           <div
             className="kyc-extraction-progress-fill"
-            style={{ width: `${(filledCount / 4) * 100}%` }}
+            style={{ width: `${(filledCount / 5) * 100}%` }}
           />
         </div>
         <span className="kyc-extraction-progress-label">
-          {filledCount}/4 fields
+          {filledCount}/5 fields
         </span>
       </div>
 
@@ -260,8 +287,9 @@ export default function DataExtractionPanel({
             </svg>
           }
           label="AGE"
-          value={derived.age ? `${derived.age}` : null}
+          value={ageStatusText}
           confidence={derived.ageConf}
+          showConfidence={false}
         />
         <DataField
           icon={
@@ -299,6 +327,24 @@ export default function DataExtractionPanel({
           label="LOAN PURPOSE"
           value={derived.loanPurpose}
           confidence={derived.loanPurposeConf}
+        />
+        <DataField
+          icon={
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path d="M9 12l2 2 4-4" />
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+          }
+          label="FACE"
+          value={derived.face}
+          confidence={derived.faceConf}
         />
       </div>
     </div>
