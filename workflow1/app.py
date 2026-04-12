@@ -8,13 +8,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-import langsmith_setup
-from agent.collection_agent import agent_graph, build_phase1_output
-from config import OPTIONAL_COLLECTED_FIELDS, REQUIRED_COLLECTED_FIELDS
-from dependencies import log_handoff, log_turn, setup_db
-from schema import AgentState, FieldConfidence
-from session_store import init_sessions_table, load_state, save_state
-from stt import router as stt_router
+from workflow1 import langsmith_setup
+from workflow1.agent.collection_agent import agent_graph, build_phase1_output
+from workflow1.config import OPTIONAL_COLLECTED_FIELDS, REQUIRED_COLLECTED_FIELDS
+from workflow1.dependencies import log_handoff, log_turn, setup_db
+from workflow1.schema import AgentState, FieldConfidence
+from workflow1.session_store import init_sessions_table, load_state, save_state
+from workflow1.stt import router as stt_router
 
 langsmith_setup.bootstrap()
 

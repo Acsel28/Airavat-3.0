@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from config import REQUIRED_COLLECTED_FIELDS
-from schema import AgentState, LLMExtractionOutput
+from workflow1.config import REQUIRED_COLLECTED_FIELDS
+from workflow1.schema import AgentState, LLMExtractionOutput
 
 
 def _clamp_confidence(value: float) -> float:

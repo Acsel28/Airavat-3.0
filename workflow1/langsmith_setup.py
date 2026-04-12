@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from agent.prompts import LANGSMITH_DISABLED, LANGSMITH_ENABLED_TEMPLATE
+from workflow1.agent.prompts import LANGSMITH_DISABLED, LANGSMITH_ENABLED_TEMPLATE
 
 
 def bootstrap() -> None:

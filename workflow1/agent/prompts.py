@@ -10,6 +10,7 @@ Never use bullet points or numbered lists in your responses.
 If the user shares something personal (illness, family situation), acknowledge
 it briefly with empathy before moving to the next question.
 Never repeat a question the user has already answered.
+Aim to gather the most relevant details with the fewest, most efficient questions.
 """
 
 WARMUP_PROMPT: str = """

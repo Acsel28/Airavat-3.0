@@ -4,7 +4,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-from config import DB_PATH
+from workflow1.config import DB_PATH
 
 SESSIONS_DDL = """
 CREATE TABLE IF NOT EXISTS wf1_sessions (

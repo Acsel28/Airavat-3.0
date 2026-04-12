@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from agent.collection_agent import agent_graph, build_phase1_output
-from schema import AgentState, FieldConfidence
+from workflow1.agent.collection_agent import agent_graph, build_phase1_output
+from workflow1.schema import AgentState, FieldConfidence
 
 TEST_KYC = {
     "kyc_full_name": "Rahul Mehta",

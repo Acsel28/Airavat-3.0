@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from config import (
+from workflow1.config import (
     CREDIT_BASE,
     CREDIT_FRAUD_PENALTY_MULTIPLIER,
     CREDIT_INCOME_DIVISOR,

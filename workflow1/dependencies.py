@@ -5,7 +5,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 
-from agent.prompts import (
+from workflow1.agent.prompts import (
     AUDIT_AGENT_TEMPLATE,
     AUDIT_HANDOFF_AGENT_SAID,
     AUDIT_HEADER,
@@ -13,7 +13,7 @@ from agent.prompts import (
     AUDIT_USER_TEMPLATE,
     DB_READY_TEMPLATE,
 )
-from config import DB_PATH
+from workflow1.config import DB_PATH
 
 
 def setup_db() -> None:

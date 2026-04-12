@@ -4,15 +4,22 @@ import itertools
 import os
 import re
 import time
+import warnings
 from collections import deque
 
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from config import GEMINI_MODEL, LLM_MAX_REQUESTS_PER_MIN
-from agent.prompts import LLM_KEYS_MISSING_ERROR
+from workflow1.config import GEMINI_MODEL, LLM_MAX_REQUESTS_PER_MIN
+from workflow1.agent.prompts import LLM_KEYS_MISSING_ERROR
 
 load_dotenv()
+
+warnings.filterwarnings(
+    "ignore",
+    message="Convert_system_message_to_human will be deprecated!",
+    category=UserWarning,
+)
 
 _raw_keys: list[str] = [
     os.getenv("GOOGLE_API_KEY_1", ""),

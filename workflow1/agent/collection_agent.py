@@ -8,12 +8,12 @@ from typing import Literal
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
 
-from config import CONFIDENCE_THRESHOLD, REQUIRED_COLLECTED_FIELDS
-from schema import AgentState, LLMInferenceOutput, Phase1Output, PolicyInputs
+from workflow1.config import CONFIDENCE_THRESHOLD, REQUIRED_COLLECTED_FIELDS
+from workflow1.schema import AgentState, LLMInferenceOutput, Phase1Output, PolicyInputs
 
-from agent.extractor import get_missing_required_fields, parse_collection_response
-from agent.llm_client import invoke_llm
-from agent.prompts import (
+from workflow1.agent.extractor import get_missing_required_fields, parse_collection_response
+from workflow1.agent.llm_client import invoke_llm
+from workflow1.agent.prompts import (
     COLLECTION_PROMPT,
     HANDOFF_SUCCESS_MESSAGE_TEMPLATE,
     HANDOFF_VALIDATION_FAILURE_MESSAGE,
