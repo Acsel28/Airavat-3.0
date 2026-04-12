@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>STT Test</title>
+    <style>
+      :root {
+        --bg: #0b0d11;
+        --panel: #141824;
+        --panel-2: #1b2233;
+        --accent: #ff6b6b;
+        --accent-2: #4dd4ac;
+        --text: #f2f4f8;
+        --muted: #9aa3b2;
+        --mono: "SFMono-Regular", ui-monospace, "Menlo", "Monaco", "Courier New", monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "Space Grotesk", "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top, #1f2335, var(--bg));
+        color: var(--text);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 32px;
+      }
+      .wrap {
+        width: min(960px, 100%);
+        display: grid;
+        gap: 24px;
+      }
+      .panel {
+        background: var(--panel);
+        border-radius: 20px;
+        padding: 28px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 28px;
+      }
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .mic {
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        border: none;
+        background: var(--accent);
+        color: #fff;
+        font-size: 16px;
+        cursor: pointer;
+        box-shadow: 0 12px 30px rgba(255, 107, 107, 0.4);
+        position: relative;
+      }
+      .mic.recording::after {
+        content: "";
+        position: absolute;
+        inset: -12px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 107, 107, 0.4);
+        animation: pulse 1.4s infinite;
+      }
+      @keyframes pulse {
+        0% { transform: scale(0.9); opacity: 0.6; }
+        70% { transform: scale(1.15); opacity: 0; }
+        100% { opacity: 0; }
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        align-items: center;
+      }
+      .transcript {
+        font-family: var(--mono);
+        background: var(--panel-2);
+        padding: 16px;
+        border-radius: 12px;
+        min-height: 90px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        background: rgba(255, 255, 255, 0.08);
+      }
+      .pill.good {
+        background: rgba(77, 212, 172, 0.2);
+        color: #9ff3d8;
+      }
+      .spinner {
+        width: 18px;
+        height: 18px;
+        border: 2px solid rgba(255, 255, 255, 0.2);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      .log {
+        max-height: 220px;
+        overflow-y: auto;
+        display: grid;
+        gap: 12px;
+        padding-right: 6px;
+      }
+      .log-item {
+        background: rgba(255, 255, 255, 0.04);
+        padding: 12px;
+        border-radius: 10px;
+        font-family: var(--mono);
+        font-size: 13px;
+      }
+      @media (max-width: 760px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .mic {
+          width: 100px;
+          height: 100px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="panel">
+        <h1>Whisper STT Test</h1>
+        <div class="status" id="status">Ready to record.</div>
+        <div class="grid">
+          <button class="mic" id="mic">Start</button>
+          <div>
+            <div class="transcript" id="transcript">Transcript will appear here.</div>
+            <div style="margin-top: 12px; display: flex; gap: 12px; flex-wrap: wrap;">
+              <span class="pill" id="confidence">Confidence: --</span>
+              <span class="pill" id="duration">Duration: --</span>
+              <span class="pill" id="language">Language: --</span>
+              <span class="pill" id="consent" style="display:none;">Consent detected</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Session Log</h2>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+
+    <script>
+      const micButton = document.getElementById("mic");
+      const statusEl = document.getElementById("status");
+      const transcriptEl = document.getElementById("transcript");
+      const confidenceEl = document.getElementById("confidence");
+      const durationEl = document.getElementById("duration");
+      const languageEl = document.getElementById("language");
+      const consentEl = document.getElementById("consent");
+      const logEl = document.getElementById("log");
+
+      let mediaRecorder;
+      let chunks = [];
+      let recording = false;
+      let turnNumber = 1;
+
+      function getSupportedMimeType() {
+        const candidates = [
+          "audio/webm;codecs=opus",
+          "audio/webm",
+          "audio/mp4",
+        ];
+        return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+      }
+
+      function extensionFromMime(mimeType) {
+        if (mimeType.includes("mp4")) return "mp4";
+        if (mimeType.includes("ogg")) return "ogg";
+        return "webm";
+      }
+
+      async function startRecording() {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mimeType = getSupportedMimeType();
+        mediaRecorder = mimeType
+          ? new MediaRecorder(stream, { mimeType })
+          : new MediaRecorder(stream);
+        chunks = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            chunks.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = () => {
+          stream.getTracks().forEach((track) => track.stop());
+          sendAudio();
+        };
+
+        mediaRecorder.start();
+        recording = true;
+        micButton.textContent = "Stop";
+        micButton.classList.add("recording");
+        statusEl.textContent = "Recording...";
+      }
+
+      function stopRecording() {
+        if (mediaRecorder && recording) {
+          mediaRecorder.stop();
+          recording = false;
+          micButton.textContent = "Start";
+          micButton.classList.remove("recording");
+          statusEl.innerHTML = "<span class='spinner'></span> Transcribing...";
+        }
+      }
+
+      async function sendAudio() {
+        const mimeType = mediaRecorder && mediaRecorder.mimeType ? mediaRecorder.mimeType : "audio/webm";
+        const blob = new Blob(chunks, { type: mimeType });
+        const ext = extensionFromMime(mimeType);
+        const form = new FormData();
+        form.append("audio", blob, `turn_${turnNumber}.${ext}`);
+        form.append("session_id", "test-session");
+        form.append("turn_number", turnNumber);
+        form.append("stage", "test");
+
+        try {
+          const res = await fetch("http://localhost:8001/stt", {
+            method: "POST",
+            body: form,
+          });
+          const data = await res.json();
+          transcriptEl.textContent = data.transcript || "(no transcript)";
+          confidenceEl.textContent = `Confidence: ${data.confidence}`;
+          durationEl.textContent = `Duration: ${data.duration_seconds}s`;
+          languageEl.textContent = `Language: ${data.language}`;
+
+          if (data.is_consent) {
+            consentEl.style.display = "inline-flex";
+            consentEl.classList.add("good");
+          } else {
+            consentEl.style.display = "none";
+            consentEl.classList.remove("good");
+          }
+
+          const entry = document.createElement("div");
+          entry.className = "log-item";
+          entry.textContent = `#${data.turn_number}: ${data.transcript}`;
+          logEl.prepend(entry);
+          statusEl.textContent = "Ready to record.";
+          turnNumber += 1;
+        } catch (err) {
+          statusEl.textContent = "Transcription failed.";
+        }
+      }
+
+      micButton.addEventListener("click", () => {
+        if (recording) {
+          stopRecording();
+        } else {
+          startRecording();
+        }
+      });
+    </script>
+  </body>
+</html>

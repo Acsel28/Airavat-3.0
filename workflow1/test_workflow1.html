@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Workflow1 STT Test</title>
+    <style>
+      :root {
+        --bg: #0a0b10;
+        --panel: #151827;
+        --panel-2: #1f2436;
+        --accent: #5f8cff;
+        --accent-2: #3fd0a0;
+        --danger: #ff6464;
+        --warn: #ffb74d;
+        --text: #f5f6fb;
+        --muted: #a5adbc;
+        --mono: "SFMono-Regular", ui-monospace, "Menlo", "Monaco", "Courier New", monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "Space Grotesk", "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top, #1c2133, var(--bg));
+        color: var(--text);
+        min-height: 100vh;
+        padding: 24px;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 1fr 1.3fr;
+        gap: 24px;
+      }
+      .panel {
+        background: var(--panel);
+        border-radius: 18px;
+        padding: 20px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+      }
+      h1, h2 {
+        margin: 0 0 12px;
+      }
+      label {
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      input, select {
+        width: 100%;
+        background: var(--panel-2);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: var(--text);
+        border-radius: 10px;
+        padding: 10px 12px;
+        margin-top: 6px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      button {
+        background: var(--accent);
+        border: none;
+        color: #fff;
+        padding: 12px 18px;
+        border-radius: 10px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .chat {
+        height: 380px;
+        background: var(--panel-2);
+        border-radius: 16px;
+        padding: 16px;
+        overflow-y: auto;
+        display: grid;
+        gap: 12px;
+      }
+      .bubble {
+        max-width: 70%;
+        padding: 12px 14px;
+        border-radius: 14px;
+        font-size: 14px;
+        line-height: 1.4;
+      }
+      .bubble.agent {
+        background: rgba(255, 255, 255, 0.08);
+        justify-self: start;
+      }
+      .bubble.user {
+        background: rgba(95, 140, 255, 0.2);
+        justify-self: end;
+      }
+      .mic {
+        margin-top: 12px;
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        border: none;
+        background: var(--accent-2);
+        color: #fff;
+        font-weight: 600;
+        cursor: pointer;
+        position: relative;
+      }
+      .mic.recording::after {
+        content: "";
+        position: absolute;
+        inset: -10px;
+        border-radius: 50%;
+        border: 2px solid rgba(63, 208, 160, 0.4);
+        animation: pulse 1.4s infinite;
+      }
+      @keyframes pulse {
+        0% { transform: scale(0.9); opacity: 0.7; }
+        70% { transform: scale(1.2); opacity: 0; }
+        100% { opacity: 0; }
+      }
+      .progress {
+        height: 10px;
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 999px;
+        overflow: hidden;
+        margin-bottom: 12px;
+      }
+      .progress > div {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #3fd0a0, #5f8cff);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+        font-size: 12px;
+      }
+      th, td {
+        text-align: left;
+        padding: 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      }
+      .tag {
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        display: inline-flex;
+        align-items: center;
+      }
+      .tag.green {
+        background: rgba(63, 208, 160, 0.2);
+        color: #a7f3dc;
+      }
+      .tag.yellow {
+        background: rgba(255, 183, 77, 0.2);
+        color: #ffd59f;
+      }
+      .tag.red {
+        background: rgba(255, 100, 100, 0.2);
+        color: #ff9d9d;
+      }
+      .banner {
+        margin-top: 12px;
+        padding: 10px 14px;
+        border-radius: 10px;
+        background: rgba(63, 208, 160, 0.15);
+        color: #b0f3de;
+        display: none;
+      }
+      .modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      .modal-card {
+        background: #0f1424;
+        padding: 24px;
+        border-radius: 16px;
+        max-width: 680px;
+        width: 100%;
+      }
+      pre {
+        background: rgba(255, 255, 255, 0.06);
+        padding: 12px;
+        border-radius: 10px;
+        font-size: 12px;
+        max-height: 300px;
+        overflow-y: auto;
+        font-family: var(--mono);
+      }
+      @media (max-width: 900px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Workflow1 Audio Session</h1>
+    <div class="layout">
+      <div class="panel">
+        <h2>Session Setup</h2>
+        <div class="grid">
+          <div>
+            <label>Full Name</label>
+            <input id="full_name" value="Rahul Mehta" />
+          </div>
+          <div>
+            <label>DOB</label>
+            <input id="dob" value="1990-05-15" />
+          </div>
+          <div>
+            <label>Age</label>
+            <input id="age" value="34" type="number" />
+          </div>
+          <div>
+            <label>Gender</label>
+            <input id="gender" value="male" />
+          </div>
+          <div>
+            <label>PAN</label>
+            <input id="pan" value="ABCPM1234D" />
+          </div>
+          <div>
+            <label>City</label>
+            <input id="city" value="Mumbai" />
+          </div>
+          <div>
+            <label>State</label>
+            <input id="state" value="Maharashtra" />
+          </div>
+          <div>
+            <label>KYC Verified</label>
+            <select id="kyc_verified">
+              <option value="true" selected>True</option>
+              <option value="false">False</option>
+            </select>
+          </div>
+          <div>
+            <label>Employer</label>
+            <input id="employer_name" value="Infosys Ltd" />
+          </div>
+          <div>
+            <label>Employment Type</label>
+            <input id="employment_type" value="salaried" />
+          </div>
+          <div>
+            <label>Gross Monthly Income</label>
+            <input id="gross_monthly_income" value="95000" type="number" />
+          </div>
+          <div>
+            <label>Net Monthly Income</label>
+            <input id="net_monthly_income" value="78000" type="number" />
+          </div>
+          <div>
+            <label>PF Deducted</label>
+            <select id="pf_deducted">
+              <option value="true" selected>True</option>
+              <option value="false">False</option>
+            </select>
+          </div>
+        </div>
+        <button id="start_session" style="margin-top: 16px;">Start Session</button>
+        <p class="muted" id="session_info"></p>
+      </div>
+
+      <div class="panel">
+        <h2>Conversation</h2>
+        <div class="progress"><div id="progress_fill"></div></div>
+        <div class="chat" id="chat"></div>
+        <button class="mic" id="mic">Mic</button>
+        <div class="banner" id="complete_banner">Phase 1 Complete - Proceeding to Loan Selection</div>
+        <table>
+          <thead>
+            <tr><th>Field</th><th>Value</th><th>Status</th></tr>
+          </thead>
+          <tbody id="schema_table"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="modal" id="modal">
+      <div class="modal-card">
+        <h2>Phase1Output</h2>
+        <pre id="phase1_output"></pre>
+        <button id="close_modal">Close</button>
+      </div>
+    </div>
+
+    <script>
+      const API_BASE = "http://localhost:8000";
+      const requiredFields = [
+        "existing_emi_monthly",
+        "active_loan_count",
+        "missed_payments_last_12m",
+        "collateral_offered",
+        "loan_query_free_text",
+        "requested_amount",
+        "urgency",
+      ];
+      const optionalFields = [
+        "collateral_type",
+        "collateral_value",
+        "primary_bank",
+        "preferred_tenure_months",
+      ];
+
+      let sessionId = null;
+      let turnNumber = 1;
+      let mediaRecorder;
+      let chunks = [];
+      let recording = false;
+
+      const chatEl = document.getElementById("chat");
+      const schemaTable = document.getElementById("schema_table");
+      const progressFill = document.getElementById("progress_fill");
+      const modal = document.getElementById("modal");
+      const phase1OutputEl = document.getElementById("phase1_output");
+
+      function addBubble(text, role) {
+        const div = document.createElement("div");
+        div.className = `bubble ${role}`;
+        div.textContent = text;
+        chatEl.appendChild(div);
+        chatEl.scrollTop = chatEl.scrollHeight;
+      }
+
+      function getFormValue(id) {
+        return document.getElementById(id).value;
+      }
+
+      function buildPhase1Output(state) {
+        return {
+          session_id: state.session_id,
+          query: state.loan_query_free_text || "",
+          policy_inputs: {
+            age: state.age,
+            employment_type: state.employment_type,
+            gross_monthly_income: state.gross_monthly_income,
+            net_monthly_income: state.net_monthly_income,
+            existing_emi_monthly: state.existing_emi_monthly || 0,
+            credit_score: state.credit_score || 0,
+            fraud_score: state.fraud_score || 0,
+            risk_persona: state.risk_persona || "standard",
+            intent_category: state.intent_category,
+            requested_amount: state.requested_amount || 0,
+            preferred_tenure_months: state.preferred_tenure_months,
+            collateral_offered: !!state.collateral_offered,
+            collateral_value: state.collateral_value,
+            missed_payments_last_12m: state.missed_payments_last_12m || 0,
+          },
+        };
+      }
+
+      function renderSchemaTable(collected, confidence) {
+        const allFields = [...requiredFields, ...optionalFields];
+        schemaTable.innerHTML = "";
+        let collectedCount = 0;
+
+        allFields.forEach((field) => {
+          const value = collected[field];
+          const conf = confidence[field] || 0;
+          const row = document.createElement("tr");
+          const status = document.createElement("span");
+          status.className = "tag";
+
+          if (value !== null && value !== undefined) {
+            collectedCount += requiredFields.includes(field) ? 1 : 0;
+            if (conf >= 0.75) {
+              status.classList.add("green");
+              status.textContent = `Collected (${conf.toFixed(2)})`;
+            } else {
+              status.classList.add("yellow");
+              status.textContent = `Low (${conf.toFixed(2)})`;
+            }
+          } else {
+            status.classList.add("red");
+            status.textContent = "Pending";
+          }
+
+          row.innerHTML = `
+            <td>${field}</td>
+            <td>${value === null || value === undefined ? "--" : value}</td>
+          `;
+          const statusCell = document.createElement("td");
+          statusCell.appendChild(status);
+          row.appendChild(statusCell);
+          schemaTable.appendChild(row);
+        });
+
+        const progress = Math.round((collectedCount / requiredFields.length) * 100);
+        progressFill.style.width = `${progress}%`;
+      }
+
+      async function startSession() {
+        const payload = {
+          full_name: getFormValue("full_name"),
+          dob: getFormValue("dob"),
+          age: Number(getFormValue("age")),
+          gender: getFormValue("gender"),
+          pan: getFormValue("pan"),
+          city: getFormValue("city"),
+          state: getFormValue("state"),
+          kyc_verified: getFormValue("kyc_verified") === "true",
+          employer_name: getFormValue("employer_name"),
+          employment_type: getFormValue("employment_type"),
+          gross_monthly_income: Number(getFormValue("gross_monthly_income")),
+          net_monthly_income: Number(getFormValue("net_monthly_income")),
+          pf_deducted: getFormValue("pf_deducted") === "true",
+        };
+
+        const res = await fetch(`${API_BASE}/session/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        sessionId = data.session_id;
+        document.getElementById("session_info").textContent = `Session: ${sessionId}`;
+        addBubble(data.agent_message, "agent");
+      }
+
+      function getSupportedMimeType() {
+        const candidates = [
+          "audio/webm;codecs=opus",
+          "audio/webm",
+          "audio/mp4",
+        ];
+        return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+      }
+
+      function extensionFromMime(mimeType) {
+        if (mimeType.includes("mp4")) return "mp4";
+        if (mimeType.includes("ogg")) return "ogg";
+        return "webm";
+      }
+
+      async function sendAudio() {
+        if (!sessionId) {
+          alert("Start a session first.");
+          return;
+        }
+        const mimeType = mediaRecorder && mediaRecorder.mimeType ? mediaRecorder.mimeType : "audio/webm";
+        const blob = new Blob(chunks, { type: mimeType });
+        const ext = extensionFromMime(mimeType);
+        const form = new FormData();
+        form.append("audio", blob, `turn_${turnNumber}.${ext}`);
+        form.append("session_id", sessionId);
+        form.append("turn_number", turnNumber);
+        form.append("stage", "collection");
+
+        const sttRes = await fetch(`${API_BASE}/stt`, {
+          method: "POST",
+          body: form,
+        });
+        const stt = await sttRes.json();
+        addBubble(stt.transcript || "(no transcript)", "user");
+
+        const turnRes = await fetch(`${API_BASE}/session/${sessionId}/turn`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_message: stt.transcript || "" }),
+        });
+        const turn = await turnRes.json();
+        addBubble(turn.agent_message, "agent");
+        renderSchemaTable(turn.collected_fields, turn.field_confidence);
+
+        if (turn.phase1_complete) {
+          document.getElementById("complete_banner").style.display = "block";
+          const stateRes = await fetch(`${API_BASE}/session/${sessionId}/state`);
+          const state = await stateRes.json();
+          const output = buildPhase1Output(state);
+          phase1OutputEl.textContent = JSON.stringify(output, null, 2);
+          modal.style.display = "flex";
+        }
+        turnNumber += 1;
+      }
+
+      async function startRecording() {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mimeType = getSupportedMimeType();
+        mediaRecorder = mimeType
+          ? new MediaRecorder(stream, { mimeType })
+          : new MediaRecorder(stream);
+        chunks = [];
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) chunks.push(event.data);
+        };
+        mediaRecorder.onstop = () => {
+          stream.getTracks().forEach((track) => track.stop());
+          sendAudio();
+        };
+        mediaRecorder.start();
+        recording = true;
+        document.getElementById("mic").classList.add("recording");
+      }
+
+      function stopRecording() {
+        if (mediaRecorder && recording) {
+          mediaRecorder.stop();
+          recording = false;
+          document.getElementById("mic").classList.remove("recording");
+        }
+      }
+
+      document.getElementById("start_session").addEventListener("click", startSession);
+      document.getElementById("mic").addEventListener("click", () => {
+        if (recording) stopRecording();
+        else startRecording();
+      });
+      document.getElementById("close_modal").addEventListener("click", () => {
+        modal.style.display = "none";
+      });
+    </script>
+  </body>
+</html>
