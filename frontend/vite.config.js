@@ -13,6 +13,8 @@ export default defineConfig({
       '/predict-age': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
       '/get_me': 'http://localhost:8000',
+      '/loan': 'http://localhost:8000',
+      '/session': 'http://localhost:8000',
     },
   },
 })

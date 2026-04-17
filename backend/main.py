@@ -15,24 +15,28 @@ import uuid
 import sqlite3
 import json
 import math
+import asyncio
+
+# CRITICAL: Load environment variables BEFORE any other imports
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except Exception:
+    pass
+
 import numpy as np
 import cv2
 import mediapipe as mp
 import face_recognition
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from user_me import get_me as get_me_endpoint
+from loan_agent import loan_chat, finalize_loan_application, get_loan_state, get_loan_history
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import random
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
-except Exception:
-    pass
 
 app = FastAPI(title="AI Onboarding Backend", version="1.1.0")
 
@@ -68,7 +72,7 @@ FRAME_SCALE = 0.5
 AUTHORIZED_COSINE_THRESHOLD = 0.92
 EMBEDDING_DB_PATH = "authorized_embeddings.db"
 VIOLATION_TIMEOUT_SECONDS = 30
-MAX_VIOLATIONS = 3
+MAX_VIOLATIONS = 100
 
 # ─── In-memory state ─────────────────────────────────────────────────────────
 last_frame_time: float = 0.0
@@ -1044,6 +1048,141 @@ async def clear_session(session_id: str):
     return {"deleted": session_id}
 
 
+# ─── Loan Agent Endpoints ──────────────────────────────────────────────────────
+class LoanChatRequest(BaseModel):
+    session_id: str
+    message: str
+    user_id: Optional[int] = None
+    kyc_profile: Optional[dict] = None
+
+
+class LoanApproveRequest(BaseModel):
+    session_id: str
+    user_id: Optional[int] = None
+    approved_terms: Optional[dict] = None  # {amount, interest_rate, tenure_months}
+
+
+@app.post("/loan/chat")
+async def loan_chat_endpoint(req: LoanChatRequest):
+    """Multi-turn loan advisor conversation."""
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    try:
+        result = loan_chat(
+            session_id=req.session_id,
+            user_message=req.message,
+            kyc_profile=req.kyc_profile,
+            user_id=req.user_id,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Loan agent error: {e}")
+
+
+@app.post("/loan/chat-stream")
+async def loan_chat_stream_endpoint(req: LoanChatRequest):
+    """Streaming version of loan chat - streams response word by word."""
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    
+    async def event_generator():
+        try:
+            result = loan_chat(
+                session_id=req.session_id,
+                user_message=req.message,
+                kyc_profile=req.kyc_profile,
+                user_id=req.user_id,
+            )
+            
+            # Stream the reply text word by word with small delays for natural feel
+            reply_text = result.get("reply", "")
+            words = reply_text.split(" ")
+            
+            for i, word in enumerate(words):
+                # Add space after each word except the last
+                text_chunk = word + (" " if i < len(words) - 1 else "")
+                
+                # Send as JSON event
+                event_data = {
+                    "type": "text",
+                    "chunk": text_chunk,
+                    "is_final": i == len(words) - 1
+                }
+                yield f"data: {json.dumps(event_data)}\n\n"
+                
+                # Small delay for streaming effect
+                await asyncio.sleep(0.05)
+            
+            # Send metadata after text is done
+            metadata = {
+                "type": "metadata",
+                "phase": result.get("phase"),
+                "extracted_fields": result.get("extracted_fields"),
+                "recommended_loan": result.get("recommended_loan"),
+                "offer": result.get("offer"),
+                "confidence": result.get("confidence"),
+                "is_final": result.get("is_final"),
+                "turn_count": result.get("turn_count"),
+            }
+            yield f"data: {json.dumps(metadata)}\n\n"
+            
+            # Send completion signal
+            yield "data: {\"type\": \"done\"}\n\n"
+            
+        except Exception as e:
+            error_event = {"type": "error", "message": str(e)}
+            yield f"data: {json.dumps(error_event)}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+
+@app.post("/loan/approve")
+async def loan_approve_endpoint(req: LoanApproveRequest):
+    """Finalize and approve the loan off
+    er."""
+    print(f"[LoanApprove] Request received: session={req.session_id}, user={req.user_id}")
+    try:
+        result = finalize_loan_application(
+            session_id=req.session_id,
+            user_id=req.user_id,
+            approved_terms=req.approved_terms,
+        )
+        print(f"[LoanApprove] Success: app_id={result.get('application_id')}")
+        return result
+    except ValueError as e:
+        print(f"[LoanApprove] ValueError: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        print(f"[LoanApprove] RuntimeError: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        print(f"[LoanApprove] Unexpected error: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Approval failed: {str(e)}")
+
+
+@app.get("/loan/state/{session_id}")
+async def loan_state_endpoint(session_id: str):
+    """Get current loan agent state for a session."""
+    return get_loan_state(session_id)
+
+
+@app.get("/loan/history/{session_id}")
+async def loan_history_endpoint(session_id: str):
+    """Get full loan conversation history for a session."""
+    messages = get_loan_history(session_id)
+    return {"session_id": session_id, "messages": messages, "count": len(messages)}
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "AI Onboarding Backend", "version": "1.1.0"}
+    return {"status": "ok", "service": "AI Onboarding Backend", "version": "1.2.0"}

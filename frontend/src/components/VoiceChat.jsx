@@ -1,6 +1,6 @@
 /**
- * VoiceChat – right panel showing conversation with AI Assistant.
- * Styled to match the screenshot: white card, message bubbles, STT labels.
+ * VoiceChat – Google Meet Style
+ * Unmute to record, Mute to send
  */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 
@@ -13,17 +13,15 @@ export default function VoiceChat({
   sessionActive,
   onStateChange,
   onSubmitText,
-  onTranscriptChange,
   avatarState,
-  assistantReply,
 }) {
-  const [listening, setListening] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
   const [transcript, setTranscript] = useState("");
   const [supported, setSupported] = useState(true);
-  const [inputText, setInputText] = useState("");
 
   const recognitionRef = useRef(null);
   const scrollRef = useRef(null);
+  const finalTranscriptRef = useRef("");
 
   useEffect(() => {
     if (!SpeechRecognition) setSupported(false);
@@ -34,66 +32,91 @@ export default function VoiceChat({
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
 
-  const startListening = useCallback(() => {
-    if (!SpeechRecognition || listening || !sessionActive || loading) return;
+  // Auto start/stop recording based on mute state
+  useEffect(() => {
+    if (!isMuted && sessionActive && !loading) {
+      startRecording();
+    } else {
+      stopRecording();
+    }
+  }, [isMuted, sessionActive, loading]);
+
+  const startRecording = useCallback(() => {
+    if (!SpeechRecognition || !sessionActive || loading) return;
+
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
-    recognition.continuous = false;
+
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = "en-US";
 
+    finalTranscriptRef.current = "";
+    setTranscript("");
+    onStateChange?.("listening");
+
     recognition.onstart = () => {
-      setListening(true);
-      setTranscript("");
-      onTranscriptChange?.("");
-      onStateChange?.("listening");
+      console.log("🎤 Recording started");
     };
+
     recognition.onresult = (e) => {
-      let interim = "",
-        final = "";
+      let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const val = e.results[i][0].transcript;
-        if (e.results[i].isFinal) final += val;
-        else interim += val;
+        if (e.results[i].isFinal) {
+          finalTranscriptRef.current += val + " ";
+        } else {
+          interim += val;
+        }
       }
-      const next = final || interim;
-      setTranscript(next);
-      onTranscriptChange?.(next);
-      if (final.trim()) {
-        recognition.stop();
-        onSubmitText?.(final.trim());
-      }
+
+      const displayText = (finalTranscriptRef.current + interim).trim();
+      setTranscript(displayText);
     };
-    recognition.onerror = () => {
-      setListening(false);
-      setTranscript("");
-      onTranscriptChange?.("");
-      onStateChange?.("idle");
+
+    recognition.onerror = (event) => {
+      console.warn("Speech error:", event.error);
     };
+
     recognition.onend = () => {
-      setListening(false);
-      setTranscript("");
-      onTranscriptChange?.("");
+      console.log("Recording ended");
     };
-    recognition.start();
-  }, [
-    listening,
-    loading,
-    onStateChange,
-    onSubmitText,
-    onTranscriptChange,
-    sessionActive,
-  ]);
 
-  const stopListening = () => recognitionRef.current?.stop();
+    try {
+      recognition.start();
+    } catch (e) {
+      console.log("Recognition already started");
+    }
+  }, [sessionActive, loading, onStateChange]);
 
-  const handleSend = () => {
-    if (!inputText.trim() || !sessionActive || loading) return;
-    onSubmitText?.(inputText.trim());
-    setInputText("");
+  const stopRecording = useCallback(() => {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        console.log("Recognition already stopped");
+      }
+    }
+
+    // When muted, send the transcript if there's any
+    if (isMuted && finalTranscriptRef.current.trim()) {
+      const finalText = finalTranscriptRef.current.trim();
+      console.log("📤 Sending:", finalText);
+
+      setTranscript("");
+      onStateChange?.("idle");
+
+      // Send message
+      onSubmitText?.(finalText);
+
+      // Reset for next
+      finalTranscriptRef.current = "";
+    }
+  }, [isMuted, onSubmitText, onStateChange]);
+
+  const toggleMute = () => {
+    setIsMuted((prev) => !prev);
   };
-
-  const isSpeaking = avatarState === "speaking";
 
   return (
     <div className="kyc-chat-panel">
@@ -120,7 +143,7 @@ export default function VoiceChat({
             {loading && (
               <span className="kyc-chat-generating">
                 {" "}
-                · Generating Offer...
+                · Processing...
               </span>
             )}
           </div>
@@ -137,7 +160,7 @@ export default function VoiceChat({
         {messages.length === 0 && (
           <div className="kyc-chat-empty">
             {sessionActive
-              ? "Start speaking or type a message below."
+              ? "Click unmute and start speaking"
               : "Start a session to begin your KYC verification."}
           </div>
         )}
@@ -159,10 +182,8 @@ export default function VoiceChat({
                 >
                   <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
                   <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                  <line x1="12" y1="19" x2="12" y2="23" />
-                  <line x1="8" y1="23" x2="16" y2="23" />
                 </svg>
-                STT
+                Unmuted
               </div>
             )}
             <div className="kyc-msg-bubble">{m.text}</div>
@@ -170,7 +191,8 @@ export default function VoiceChat({
           </div>
         ))}
 
-        {transcript && (
+        {/* Show interim transcript if unmuted and recording */}
+        {transcript && !isMuted && (
           <div className="kyc-msg kyc-msg--user kyc-msg--interim">
             <div className="kyc-msg-stt-label">
               <svg
@@ -183,17 +205,17 @@ export default function VoiceChat({
               >
                 <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
                 <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                <line x1="12" y1="19" x2="12" y2="23" />
-                <line x1="8" y1="23" x2="16" y2="23" />
               </svg>
-              STT
+              Recording...
+              <span className="kyc-recording-dot">●</span>
             </div>
             <div className="kyc-msg-bubble kyc-msg-bubble--interim">
-              {transcript}...
+              {transcript}
             </div>
           </div>
         )}
 
+        {/* Typing indicator while waiting for response */}
         {loading && (
           <div className="kyc-msg kyc-msg--ai">
             <div className="kyc-msg-bubble kyc-msg-bubble--typing">
@@ -205,68 +227,33 @@ export default function VoiceChat({
         )}
       </div>
 
-      {/* Input area */}
+      {/* Input Controls */}
       <div className="kyc-chat-input-area">
         <button
-          className={`kyc-mic-btn ${listening ? "kyc-mic-btn--active" : ""}`}
-          onMouseDown={startListening}
-          onMouseUp={stopListening}
-          onTouchStart={startListening}
-          onTouchEnd={stopListening}
-          disabled={loading || !sessionActive || !supported}
-          title={supported ? "Hold to speak" : "Not supported in this browser"}
+          className={`kyc-mute-btn ${isMuted ? "kyc-mute-btn--muted" : "kyc-mute-btn--unmuted"}`}
+          onClick={toggleMute}
+          disabled={!sessionActive || loading || !supported}
+          title={isMuted ? "Click to unmute and speak" : "Click to mute and send"}
         >
-          {listening && <span className="kyc-mic-ping" />}
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          >
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-            <line x1="12" y1="19" x2="12" y2="23" />
-            <line x1="8" y1="23" x2="16" y2="23" />
-          </svg>
+          {isMuted ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M13 5v7h4V5h-4z"/>
+              <path d="M1 1l22 22M5 5a7 7 0 0114 0v7a7 7 0 01-14 0"/>
+              <line x1="1" y1="1" x2="23" y2="23" stroke="currentColor" strokeWidth="2"/>
+            </svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <path d="M12 19v3" />
+              <path d="M8 22h8" />
+            </svg>
+          )}
         </button>
 
-        <input
-          className="kyc-chat-input"
-          type="text"
-          placeholder={
-            sessionActive ? "Type a message..." : "Start session to chat"
-          }
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleSend();
-          }}
-          disabled={!sessionActive || loading || isSpeaking}
-        />
-
-        <button
-          className="kyc-send-btn"
-          onClick={handleSend}
-          disabled={
-            !sessionActive || !inputText.trim() || loading || isSpeaking
-          }
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          >
-            <line x1="22" y1="2" x2="11" y2="13" />
-            <polygon points="22 2 15 22 11 13 2 9 22 2" />
-          </svg>
-        </button>
+        <div className="kyc-mute-status">
+          {isMuted ? "🔴 Muted" : "🟢 Unmuted"}
+        </div>
       </div>
     </div>
   );

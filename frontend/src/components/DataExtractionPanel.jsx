@@ -103,6 +103,7 @@ export default function DataExtractionPanel({
   messages,
   sessionActive,
   ageApproval,
+  ciblScore,
 }) {
   // Derive values from messages and extractedData
   const [derived, setDerived] = useState({
@@ -215,6 +216,7 @@ export default function DataExtractionPanel({
     derived.monthlyIncome,
     derived.loanPurpose,
     derived.face,
+    ciblScore !== null && ciblScore !== undefined ? ciblScore : null,
   ].filter(Boolean).length;
 
   return (
@@ -243,11 +245,11 @@ export default function DataExtractionPanel({
         <div className="kyc-extraction-progress-bar">
           <div
             className="kyc-extraction-progress-fill"
-            style={{ width: `${(filledCount / 5) * 100}%` }}
+            style={{ width: `${(filledCount / 6) * 100}%` }}
           />
         </div>
         <span className="kyc-extraction-progress-label">
-          {filledCount}/5 fields
+          {filledCount}/6 fields
         </span>
       </div>
 
@@ -345,6 +347,26 @@ export default function DataExtractionPanel({
           label="FACE"
           value={derived.face}
           confidence={derived.faceConf}
+        />
+        <DataField
+          icon={
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 8v8" />
+              <path d="M8 12h8" />
+            </svg>
+          }
+          label="CIBL SCORE"
+          value={ciblScore !== null && ciblScore !== undefined ? `${ciblScore}` : null}
+          confidence={ciblScore !== null && ciblScore !== undefined ? 95 : 0}
+          showConfidence={ciblScore !== null && ciblScore !== undefined}
         />
       </div>
     </div>

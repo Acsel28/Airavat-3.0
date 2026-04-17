@@ -14,6 +14,7 @@ import WebcamFeed from "./components/WebcamFeed.jsx";
 import TalkingAvatar from "./components/TalkingAvatar.jsx";
 import VoiceChat from "./components/VoiceChat.jsx";
 import DataExtractionPanel from "./components/DataExtractionPanel.jsx";
+import LoanOfferModal from "./components/LoanOfferModal.jsx";
 
 const KYC_API = import.meta.env.VITE_KYC_API_URL || "http://localhost:8001";
 const APP_SESSION_ID_STORAGE_KEY = "app_onboarding_session_id";
@@ -146,6 +147,16 @@ export default function App() {
   });
   const [sessionUserName, setSessionUserName] = useState(null);
 
+  // ── Loan Agent State ─────────────────────────────────────────────────────
+  const [loanPhase, setLoanPhase] = useState("discovery");
+  const [currentOffer, setCurrentOffer] = useState(null);
+  const [ciblScore, setCiblScore] = useState(null);
+  const [showOfferModal, setShowOfferModal] = useState(false);
+  const [loanApproved, setLoanApproved] = useState(false);
+  const [loanExtractedFields, setLoanExtractedFields] = useState({});
+  const [loanApproving, setLoanApproving] = useState(false);
+  const kycProfileRef = useRef(null); // cached from get_me
+
   const synthRef = useRef(
     typeof window !== "undefined" ? window.speechSynthesis : null,
   );
@@ -182,6 +193,14 @@ export default function App() {
         if (data?.session_id) {
           setSessionId(data.session_id);
         }
+        // Cache KYC profile for loan agent
+        kycProfileRef.current = {
+          full_name: data.full_name,
+          email: data.email,
+          mobile_number: data.mobile_number,
+          aadhaar_masked: data.aadhaar_masked,
+          session_id: data.session_id,
+        };
 
         const faceMatch = data?.face_match;
         let faceMatchLabel = null;
@@ -312,7 +331,7 @@ export default function App() {
       setMeetingTerminated(true);
       setMeetingEndMessage(
         data?.meeting_end_message ||
-          "Meeting ended due to multiple identity violations.",
+        "Meeting ended due to multiple identity violations.",
       );
       setSessionActive(false);
       setAvatarState("idle");
@@ -389,7 +408,7 @@ export default function App() {
     [speakReplyFallback],
   );
 
-  // ── Submit ───────────────────────────────────────────────────────────────────
+  // ── Submit (Loan Agent) with Streaming ────────────────────────────────────
   const submitText = useCallback(
     async (providedText) => {
       const text = (providedText ?? inputText).trim();
@@ -399,92 +418,104 @@ export default function App() {
       setTranscript("");
       setLastUserText(text);
       setAssistantReply("");
-      setAssistantProvider(""); // teammate
+      setAssistantProvider("");
       setAvatarVideoUrl("");
       setInputText("");
       appendMessage({ role: "user", text });
 
-      // Our: inline loan keyword extraction from user speech
-      if (
-        text.toLowerCase().includes("loan") ||
-        text.toLowerCase().includes("home") ||
-        text.toLowerCase().includes("renovati")
-      ) {
-        setExtractedData((prev) => ({
-          ...prev,
-          loanPurpose: prev.loanPurpose || "Home Renovation",
-        }));
-      }
-      if (text.match(/\d+[\.,]\d+\s*(lakh|lac|k)/i)) {
-        const m = text.match(/(\d+[\.,]?\d*)\s*(lakh|lac)/i);
-        if (m)
-          setExtractedData((prev) => ({
-            ...prev,
-            monthlyIncome: prev.monthlyIncome || `₹${m[1]} lakhs`,
-          }));
-      }
-
       const startedAt = Date.now();
 
       try {
-        const res = await fetch("/process-text", {
+        // Get complete response as single message
+        const res = await fetch("/loan/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, session_id: sessionId }),
+          body: JSON.stringify({
+            session_id: sessionId,
+            message: text,
+            user_id: kycProfileRef.current?.user_id || null,
+            kyc_profile: kycProfileRef.current || null,
+          }),
         });
+
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-        const data = await res.json();
+        const responseData = await res.json();
         const responseTime = Date.now() - startedAt;
+        const fullReply = responseData.reply || "";
 
+        // Update loan-specific state from metadata
+        if (responseData.phase) setLoanPhase(responseData.phase);
+        if (responseData.cibl_score) {
+          // Extract score from CIBL data object
+          const scoreValue = responseData.cibl_score.score || responseData.cibl_score;
+          setCiblScore(scoreValue);
+        }
+        if (responseData.extracted_fields) {
+          setLoanExtractedFields(responseData.extracted_fields);
+          setExtractedData((prev) => ({
+            ...prev,
+            monthlyIncome: responseData.extracted_fields.monthly_income
+              ? `₹${Number(responseData.extracted_fields.monthly_income).toLocaleString("en-IN")}`
+              : prev.monthlyIncome,
+            loanPurpose:
+              responseData.extracted_fields.loan_purpose || prev.loanPurpose,
+          }));
+        }
+        if (responseData.offer) setCurrentOffer(responseData.offer);
+
+        // Track response time
         setResponseTimes((prev) => {
           const next = [...prev, responseTime];
           return next.length > 20 ? next.slice(-20) : next;
         });
 
-        setAssistantReply(data.reply);
-        setAssistantProvider(data.provider || ""); // teammate
-        handleIntent(data.intent);
-        parseExtractedData(data.reply, data.intent);
+        // Update intent tracking
+        handleIntent(responseData.phase || "loan");
 
-        // Teammate: includes provider in message payload
+        // Add complete message to chat
         appendMessage({
           role: "ai",
-          text: data.reply,
-          intent: data.intent,
-          provider: data.provider,
+          text: fullReply,
+          intent: responseData.phase,
+          provider: "gemini",
           rt: responseTime,
-          suggestions: data.suggestions,
         });
 
+        // Auto-show modal when reaching final stage
+        if (responseData.is_final && responseData.offer && !loanApproved) {
+          setShowOfferModal(true);
+        }
+
+        // Start TTS immediately (before avatar video, if any)
+        await speakReply(fullReply);
+
+        // Try to get avatar video, but don't wait for it
         try {
           const avatarRes = await fetch("/api/avatar/talk", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: data.reply }),
+            body: JSON.stringify({ text: fullReply }),
           });
           if (!avatarRes.ok) throw new Error(`HTTP ${avatarRes.status}`);
           const avatarData = await avatarRes.json();
           setAvatarVideoUrl(avatarData.result_url || "");
-        } catch (avatarErr) {
-          console.warn(
-            "D-ID talk unavailable, using audio fallback:",
-            avatarErr,
-          );
+        } catch (e) {
+          console.log("Avatar video unavailable, using TTS only:", e);
           setAvatarVideoUrl("");
-          await speakReply(data.reply);
         }
       } catch (err) {
-        console.error("Assistant error:", err);
+        console.error("Loan agent error:", err);
         const fallback =
           "Sorry, I had trouble responding just now. Please try again.";
         setAssistantReply(fallback);
-        setAssistantProvider("fallback"); // teammate
+        setAssistantProvider("fallback");
         appendMessage({ role: "ai", text: fallback, provider: "fallback" });
         setAvatarVideoUrl("");
         await speakReply(fallback);
       } finally {
         setLoading(false);
+        setAvatarState("idle");
       }
     },
     [
@@ -492,12 +523,74 @@ export default function App() {
       handleIntent,
       inputText,
       loading,
-      parseExtractedData,
       sessionActive,
       sessionId,
       speakReply,
+      loanApproved,
     ],
   );
+
+  // ── Loan Offer Accept ───────────────────────────────────────────────────────
+  const handleAcceptOffer = useCallback(async () => {
+    // Safety check: only allow approval at appropriate phases
+    const validPhases = ["recommendation", "negotiation", "confirmation"];
+    if (!currentOffer || loanApproving || !validPhases.includes(loanPhase)) {
+      if (!validPhases.includes(loanPhase)) {
+        appendMessage({ 
+          role: "ai", 
+          text: `❌ Cannot approve at this stage (${loanPhase}). Please complete the loan consultation first.`, 
+          provider: "system" 
+        });
+      }
+      return;
+    }
+    setLoanApproving(true);
+    try {
+      const res = await fetch("/loan/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          user_id: kycProfileRef.current?.user_id || null,
+          approved_terms: {
+            amount: currentOffer.amount,
+            interest_rate: currentOffer.interest_rate,
+            tenure_months: currentOffer.tenure_months,
+          },
+        }),
+      });
+      
+      const result = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(result.detail || `HTTP ${res.status}`);
+      }
+      
+      setLoanApproved(true);
+      setShowOfferModal(false);
+      setLoanPhase("done");
+      const msg = `✅ Offer accepted! Application ID: ${result.application_id || "N/A"}. Our team will reach out within 24 hours for document collection.`;
+      appendMessage({ role: "ai", text: msg, intent: "done", provider: "system" });
+      setAssistantReply(msg);
+      await speakReply("Congratulations! Your loan application has been accepted. We will contact you shortly.");
+    } catch (err) {
+      console.error("Approve error:", err);
+      const errorMsg = err.message || "There was an error processing your acceptance.";
+      appendMessage({ 
+        role: "ai", 
+        text: `❌ Error: ${errorMsg}. Please ensure you've gone through the loan consultation to get a recommended offer.`, 
+        provider: "system" 
+      });
+    } finally {
+      setLoanApproving(false);
+    }
+  }, [currentOffer, loanApproving, sessionId, appendMessage, speakReply]);
+
+  // ── Loan Offer Negotiate ────────────────────────────────────────────────────
+  const handleNegotiateOffer = useCallback(() => {
+    setShowOfferModal(false);
+    submitText("I'd like to negotiate the terms — can we discuss the interest rate or amount?");
+  }, [submitText]);
 
   // ── Toggle session ───────────────────────────────────────────────────────────
   const toggleSession = () => {
@@ -507,6 +600,13 @@ export default function App() {
         audioRef.current.pause();
         audioRef.current.currentTime = 0;
       }
+      setLoanPhase("discovery");
+      setCurrentOffer(null);
+      setShowOfferModal(false);
+      setLoanApproved(false);
+      setLoanExtractedFields({});
+      setLoanApproving(false);
+      kycProfileRef.current = null;
       setCurrentIntent("greeting");
       setCompletedIntents([]);
       setMessageCount(0);
@@ -520,7 +620,7 @@ export default function App() {
       setTranscript("");
       setLastUserText("");
       setAssistantReply("");
-      setAssistantProvider(""); // teammate
+      setAssistantProvider("");
       setAvatarVideoUrl("");
       setInputText("");
       setLoading(false);
@@ -530,7 +630,7 @@ export default function App() {
       setViolationSecondsRemaining(0);
       setMeetingTerminated(false);
       setMeetingEndMessage("");
-      setShowDecisionWhy(false); // teammate
+      setShowDecisionWhy(false);
       setSessionId(createSessionId());
       setExtractedData({
         fullName: null,
@@ -585,7 +685,7 @@ export default function App() {
               <path d="M9 12l2 2 4-4" />
             </svg>
             <span>
-              KYC<strong>Verify</strong>
+              FinServe
             </span>
             {sessionActive && sessionUserName && (
               <span className="kyc-topbar-user">Hi, {sessionUserName}</span>
@@ -741,6 +841,7 @@ export default function App() {
             messages={messages}
             sessionActive={sessionActive}
             ageApproval={ageApproval}
+            ciblScore={ciblScore}
           />
         </aside>
 
@@ -841,7 +942,7 @@ export default function App() {
       </main>
 
       {/* ── Teammate: Decision Modal — styled to our KYC light theme ── */}
-      {decisionReady && (
+      {/* {decisionReady && (
         <div className="kyc-alert-overlay">
           <div className="kyc-decision-card">
             <div className="kyc-decision-header">
@@ -937,6 +1038,37 @@ export default function App() {
             )}
           </div>
         </div>
+      )} */}
+
+      {/* ── Loan Phase Indicator (when active) ── */}
+      {sessionActive && loanPhase && loanPhase !== "discovery" && (
+        <div className="kyc-loan-phase-bar">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
+            <line x1="1" y1="10" x2="23" y2="10" />
+          </svg>
+          <span>Loan Advisor &mdash; Phase: <strong>{loanPhase}</strong></span>
+          {currentOffer && !showOfferModal && ["recommendation", "negotiation", "confirmation"].includes(loanPhase) && (
+            <button
+              className="kyc-loan-view-offer-btn"
+              onClick={() => setShowOfferModal(true)}
+            >
+              View Offer
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Loan Offer Modal ── */}
+      {showOfferModal && currentOffer && (
+        <LoanOfferModal
+          offer={currentOffer}
+          onAccept={handleAcceptOffer}
+          onNegotiate={handleNegotiateOffer}
+          onClose={() => setShowOfferModal(false)}
+          loading={loanApproving}
+          sessionUserName={sessionUserName}
+        />
       )}
 
       {/* ── Teammate: Meeting Terminated Modal (dismissible) ── */}
